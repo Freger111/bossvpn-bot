@@ -25,7 +25,7 @@ def load_env() -> None:
 
 load_env()
 
-VERSION = "1.0"
+VERSION = "1.3"
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 ADMINS = {int(x) for x in os.environ.get("ADMIN_IDS", "").replace(" ", "").split(",")
           if x.strip().isdigit()}
