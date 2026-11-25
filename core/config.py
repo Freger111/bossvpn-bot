@@ -50,12 +50,13 @@ BANNER = BASE / "vpn_brand" / "banner_1280x640.png"
 AVATAR = BASE / "vpn_brand" / "avatar_512.png"
 
 PLANS = [
-    {"code": "m1", "title": "1 месяц", "days": 30, "price": 199,
-     "note": "1 устройство"},
-    {"code": "m3", "title": "3 месяца", "days": 90, "price": 499,
-     "note": "до 3 устройств · выгоднее на 17%"},
-    {"code": "y1", "title": "12 месяцев", "days": 365, "price": 1490,
-     "note": "до 5 устройств · выгоднее на 38%"},
-    {"code": "p1", "title": "1 месяц Premium", "days": 30, "price": 249,
-     "note": "виден пинг · WS+TLS · до 3 устройств"},
+    {"code": "m1", "title": "1 месяц", "days": 30, "price": 199, "gb": 30,
+     "note": "30 ГБ · 1 устройство"},
+    {"code": "m3", "title": "3 месяца", "days": 90, "price": 499, "gb": 100,
+     "note": "100 ГБ · до 3 устройств · выгоднее на 17%"},
+    {"code": "y1", "title": "12 месяцев", "days": 365, "price": 1490, "gb": 500,
+     "note": "500 ГБ · до 5 устройств · выгоднее на 38%"},
+    {"code": "p1", "title": "1 месяц Premium", "days": 30, "price": 249, "gb": 200,
+     "note": "200 ГБ · виден пинг · до 3 устройств"},
 ]
+TRIAL_GB = 20
