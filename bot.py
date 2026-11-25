@@ -93,6 +93,20 @@ class VpnBot:
         return self.tg.call("sendMessage", chat_id=chat_id, text=text[:4000],
                             parse_mode="HTML", reply_markup=markup)
 
+    def say_photo(self, chat_id: int, path: Path, caption: str, markup: dict) -> None:
+        if path.exists():
+            try:
+                result = self.tg.call(
+                    "sendPhoto",
+                    files={"photo": (path.name, path.read_bytes(), "image/png")},
+                    chat_id=chat_id, caption=caption[:1000], parse_mode="HTML",
+                    reply_markup=markup)
+                if result.get("ok"):
+                    return
+            except Exception:
+                pass
+        self.say(chat_id, caption, markup)
+
     def send_banner(self, chat_id: int, caption: str, markup: dict) -> None:
         if config.BANNER.exists():
             result = self.tg.call("sendPhoto",
@@ -116,7 +130,22 @@ class VpnBot:
         self.send_banner(chat_id, caption, kb.main_menu(self.is_admin(user_id)))
 
     def show_plans(self, chat_id: int) -> None:
-        self.say(chat_id, "🛡 <b>Тарифы</b>\n\nВыберите срок:", kb.plans())
+        self.say(chat_id, "🛡 <b>Тарифы</b>\n\nЛистайте карточки 👇")
+        for plan in config.PLANS:
+            left = self.db.keys_left(plan["code"])
+            caption = (f"🛡 <b>{plan['title']}</b>\n\n"
+                       f"📅 {plan['days']} дней\n"
+                       f"📦 {plan['gb']} ГБ трафика\n"
+                       f"💰 <b>{kb.money(plan['price'])}</b>\n"
+                       f"🔑 в наличии: {left}")
+            self.say_photo(chat_id, config.plan_image(plan["code"]), caption,
+                           {"inline_keyboard": [[
+                               {"text": f"💳 Купить за {kb.money(plan['price'])}",
+                                "callback_data": f"buy:{plan['code']}"},
+                               {"text": "ℹ️ Подробнее",
+                                "callback_data": f"plan:{plan['code']}"},
+                           ]]})
+        self.say(chat_id, "◀️ Меню", kb.back("menu", "◀️ Меню"))
 
     def show_plan(self, chat_id: int, plan_code: str) -> None:
         plan = next((p for p in config.PLANS if p["code"] == plan_code), None)
@@ -124,12 +153,14 @@ class VpnBot:
             return
         left = self.db.keys_left(plan_code)
         text = (f"🛡 <b>{plan['title']}</b>\n\n"
-                f"· срок: {plan['days']} дней\n"
-                f"· трафик: {plan.get('gb', 0)} ГБ\n"
-                f"· {plan['note']}\n"
-                f"· цена: <b>{kb.money(plan['price'])}</b>\n\n"
-                f"Ключей в наличии: {left}")
-        self.say(chat_id, text, kb.plan_card(plan_code))
+                f"📅 срок: {plan['days']} дней\n"
+                f"📦 трафик: {plan.get('gb', 0)} ГБ\n"
+                f"⚡ протоколы: REALITY · WS · TLS\n"
+                f"📱 {plan['note']}\n"
+                f"💰 цена: <b>{kb.money(plan['price'])}</b>\n\n"
+                f"🔑 Ключей в наличии: {left}")
+        self.say_photo(chat_id, config.plan_image(plan_code), text,
+                       kb.plan_card(plan_code))
 
     # ---------- покупка ----------
     def start_purchase(self, chat_id: int, user_id: int, plan_code: str) -> None:
@@ -530,7 +561,8 @@ def selftest() -> int:
 
     print("2. Тарифы")
     bot.show_plans(42)
-    check("тарифы показаны", t.count("sendMessage") + t.count("sendPhoto") >= 2)
+    check("тарифы показаны", t.count("sendMessage") + t.count("sendPhoto") >= 4)
+    check("карточки с фото", t.count("sendPhoto") >= 4)
 
     print("3. Покупка")
     bot.start_purchase(42, 42, "m1")
