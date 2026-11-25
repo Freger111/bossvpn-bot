@@ -95,10 +95,40 @@ def promo(size: int = 1080) -> Image.Image:
     return img.convert("RGB")
 
 
+def plan_card(title: str, days: str, gb: str, price: str, accent=(58, 215, 255),
+              name: str = "plan.png", size: int = 1080) -> Image.Image:
+    """Карточка тарифа."""
+    img = bg(size, size, (7, 9, 15), (14, 40, 66))
+    d = ImageDraw.Draw(img)
+    d.rectangle([0, 0, size, 12], fill=accent)
+    d.text((80, 90), "БоссVPN", font=font(34, bold=False), fill=GREY)
+    d.text((80, 180), title, font=font(96), fill=WHITE)
+
+    items = [("📅", days), ("📦", gb), ("⚡", "REALITY · WS · TLS")]
+    y = 400
+    for emoji, label in items:
+        d.text((90, y), emoji, font=font(60), fill=accent)
+        d.text((190, y + 6), label, font=font(52, bold=False), fill=(210, 220, 240))
+        y += 130
+
+    d.rounded_rectangle([80, y + 30, 560, y + 170], radius=28, fill=accent)
+    d.text((120, y + 58), price, font=font(80), fill=(7, 9, 15))
+    d.text((120, y + 220), "за период", font=font(40, bold=False), fill=GREY)
+    return img.convert("RGB")
+
+
 def main() -> None:
     avatar(512).save(OUT / "avatar_512.png")
     banner(1280, 640).save(OUT / "banner_1280x640.png")
     promo(1080).save(OUT / "promo_1080.png")
+
+    plan_card("1 месяц", "30 дней", "30 ГБ", "199 ₽").save(OUT / "plan_m1.png")
+    plan_card("3 месяца", "90 дней", "100 ГБ", "499 ₽",
+              accent=(124, 92, 255)).save(OUT / "plan_m3.png")
+    plan_card("12 месяцев", "365 дней", "500 ГБ", "1490 ₽",
+              accent=(46, 214, 118)).save(OUT / "plan_y1.png")
+    plan_card("Premium", "30 дней", "200 ГБ", "249 ₽",
+              accent=(255, 178, 60)).save(OUT / "plan_p1.png")
     print("готово:", [p.name for p in sorted(OUT.glob("*.png"))])
 
 
