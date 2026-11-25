@@ -153,14 +153,21 @@ class VpnBot:
         plan = next((p for p in config.PLANS if p["code"] == plan_code), None)
         if plan is None:
             return
-        self.db.ensure_user(user_id)
-        order_id = self.db.create_order(user_id, plan)
+        user = self.db.ensure_user(user_id)
+        balance = user.get("balance") or 0
+        balance_used = min(balance, plan["price"])
+        price = plan["price"] - balance_used
+        order_id = self.db.create_order(user_id, plan, price=price, balance_used=balance_used)
+        if balance_used:
+            self.db.add_balance(user_id, -balance_used)
         text = (f"🧾 <b>Заказ #{order_id}</b>\n\n"
                 f"Тариф: {plan['title']}\n"
-                f"Сумма: <b>{kb.money(plan['price'])}</b>\n\n"
-                f"Переведите по СБП:\n"
-                f"<code>{config.PAY_SBP}</code> ({config.PAY_NAME})\n\n"
-                f"После перевода нажмите «Я оплатил» — ключ придёт автоматически.")
+                f"Сумма: <b>{kb.money(price)}</b>")
+        if balance_used:
+            text += f"\n🎁 Бонусами списано: {kb.money(balance_used)}"
+        text += (f"\n\nПереведите по СБП:\n"
+                 f"<code>{config.PAY_SBP}</code> ({config.PAY_NAME})\n\n"
+                 f"После перевода нажмите «Я оплатил» — ключ придёт автоматически.")
         self.say(chat_id, text, kb.pay_manual(order_id))
 
     def mark_paid(self, chat_id: int, user_id: int, order_id: int) -> None:
@@ -240,8 +247,14 @@ class VpnBot:
             return
         self.db.set_status(order_id, "paid")
         expires = self.db.grant(order["user_id"], order["days"], key)
-        plan = next((p for p in config.PLANS if p["code"] == order["plan_code"]), {})
+        # реферальное вознаграждение 15% от фактически оплаченной суммы
         buyer = self.db.user(order["user_id"])
+        ref_id = buyer.get("ref_id")
+        if ref_id and ref_id != order["user_id"]:
+            bonus = int(order["price"] * config.REF_PERCENT / 100)
+            if bonus > 0:
+                self.db.add_balance(ref_id, bonus)
+        plan = next((p for p in config.PLANS if p["code"] == order["plan_code"]), {})
         buyer_name = buyer.get("username") or f"client{order['user_id']}"
         happ, server_name = self.sync_server_sub(
             key, expires,
@@ -276,6 +289,10 @@ class VpnBot:
         lines = [f"🔑 <b>Ваша подписка</b>\n\n"
                  f"Дней осталось: <b>{days_left}</b>\n"
                  f"До: {time.strftime('%d.%m.%Y', time.localtime(sub['expires_at']))}"]
+        balance = self.db.user(user_id).get("balance") or 0
+        if balance:
+            lines.append(f"🎁 Бонусный баланс: <b>{kb.money(balance)}</b> "
+                         f"(спишется при следующей покупке)")
         key_uuid = server_mod.uuid_from_payload(sub["payload"])
         if key_uuid and self.panel:
             try:
