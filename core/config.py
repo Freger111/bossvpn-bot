@@ -49,6 +49,10 @@ GREY = (140, 148, 175)
 BANNER = BASE / "vpn_brand" / "banner_1280x640.png"
 AVATAR = BASE / "vpn_brand" / "avatar_512.png"
 
+
+def plan_image(code: str):
+    return BASE / "vpn_brand" / f"plan_{code}.png"
+
 PLANS = [
     {"code": "m1", "title": "1 месяц", "days": 30, "price": 199, "gb": 30,
      "note": "30 ГБ · 1 устройство"},
