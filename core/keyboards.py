@@ -54,6 +54,7 @@ def admin_panel() -> dict:
         [{"text": "🧾 Заказы", "callback_data": "adm:orders"}],
         [{"text": "📊 Статистика", "callback_data": "adm:stats"}],
         [{"text": "🔑 Ключей в наличии", "callback_data": "adm:keys"}],
+        [{"text": "🔄 Синхронизировать ключи с сервера", "callback_data": "adm:keysync"}],
         [{"text": "← Меню", "callback_data": "menu"}],
     ]}
 
