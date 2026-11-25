@@ -196,6 +196,11 @@ class Storage:
             row = self.db.execute("SELECT * FROM subs WHERE user_id = ?", (user_id,)).fetchone()
         return dict(row) if row else {}
 
+    def user(self, user_id: int) -> dict:
+        with self.lock:
+            row = self.db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return dict(row) if row else {}
+
     def setting(self, key: str, default: str = "") -> str:
         with self.lock:
             row = self.db.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
