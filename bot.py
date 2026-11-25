@@ -467,6 +467,8 @@ class VpnBot:
             self.welcome(chat_id, user_id, frm.get("username", ""), ref_id)
         elif text.startswith("/id"):
             self.say(chat_id, f"Ваш Telegram ID: <code>{user_id}</code>")
+        elif text.startswith("/version"):
+            self.say(chat_id, f"⚙️ Версия бота: <b>{config.VERSION}</b>")
         elif text.startswith("/help"):
             self.say(chat_id, kb.HELP.format(brand=config.BRAND))
         elif text.startswith("/my"):
