@@ -282,8 +282,15 @@ class VpnBot:
                 client = self.panel.find_by_uuid(key_uuid)
                 if client:
                     traffic = self.panel.traffic(client.get("email") or "")
-                    used = (traffic.get("up") or 0) + (traffic.get("down") or 0)
-                    lines.append(f"Израсходовано: <b>{server_mod.bytes_to_gb(used)}</b>")
+                    used_bytes = (traffic.get("up") or 0) + (traffic.get("down") or 0)
+                    used_gb = used_bytes / 1024 ** 3
+                    total_gb = client.get("totalGB") or 0
+                    lines.append(f"Израсходовано: <b>{used_gb:.2f} ГБ</b>")
+                    if total_gb:
+                        left_gb = max(0.0, total_gb - used_gb)
+                        lines.append(f"Осталось трафика: <b>{left_gb:.1f} ГБ из {total_gb} ГБ</b>")
+                        if used_gb >= total_gb:
+                            lines.append("⚠️ <b>Лимит трафика исчерпан</b> — доступ приостановлен.")
                     if client.get("comment"):
                         lines.append(f"Описание: {client['comment']}")
             except Exception:
@@ -472,6 +479,13 @@ class VpnBot:
             self.say(chat_id, kb.HELP.format(brand=config.BRAND))
         elif data == "support":
             self.say(chat_id, f"💬 Поддержка: {config.SUPPORT}")
+        elif data == "invite":
+            link = f"https://t.me/{config.BOT_USER}?start=ref_{user_id}"
+            self.say(chat_id,
+                     f"🎁 <b>Пригласи друга</b>\n\n"
+                     f"Пусть подключится по твоей ссылке — друг получает работающий VPN, "
+                     f"а ты помогаешь проекту.\n\nТвоя ссылка:\n<code>{link}</code>",
+                     kb.back("menu", "← Меню"))
         elif data == "adm":
             if self.is_admin(user_id):
                 self.say(chat_id, "⚙️ Админ-панель", kb.admin_panel())
