@@ -357,11 +357,15 @@ class VpnBot:
                                for i, p in enumerate(config.PLANS)),
                      kb.back("adm", "← Админ"))
             return
+        # premium-ссылки (WS+TLS) идут в план p1, остальные — по кругу
+        premium = [l for l in fresh if "premium" in l]
+        regular = [l for l in fresh if "premium" not in l]
         pools: dict[str, list[str]] = {p["code"]: [] for p in config.PLANS}
-        codes = list(pools)
-        for i, link in enumerate(fresh):
-            pools[codes[i % len(codes)]].append(link)
-        for code in codes:
+        regular_codes = [c for c in pools if c != "p1"]
+        for i, link in enumerate(regular):
+            pools[regular_codes[i % len(regular_codes)]].append(link)
+        pools["p1"].extend(premium)
+        for code in pools:
             if pools[code]:
                 self.db.add_keys(code, pools[code])
         left = {p["code"]: self.db.keys_left(p["code"]) for p in config.PLANS}
