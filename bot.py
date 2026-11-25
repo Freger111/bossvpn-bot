@@ -125,6 +125,7 @@ class VpnBot:
         left = self.db.keys_left(plan_code)
         text = (f"🛡 <b>{plan['title']}</b>\n\n"
                 f"· срок: {plan['days']} дней\n"
+                f"· трафик: {plan.get('gb', 0)} ГБ\n"
                 f"· {plan['note']}\n"
                 f"· цена: <b>{kb.money(plan['price'])}</b>\n\n"
                 f"Ключей в наличии: {left}")
@@ -174,8 +175,9 @@ class VpnBot:
             self.say(chat_id, "Заказ уже нельзя отменить.")
 
     def sync_server_sub(self, payload: str, expires_at: int,
-                        rename_to: str = "", comment: str = "") -> tuple[str, str]:
-        """Ставит срок на сервере, переименовывает клиента и возвращает Happ-ссылку."""
+                        rename_to: str = "", comment: str = "",
+                        total_gb: int = 0) -> tuple[str, str]:
+        """Ставит срок, трафик, имя на сервере и возвращает Happ-ссылку."""
         happ, email = "", ""
         if not self.panel:
             return happ, email
@@ -186,9 +188,11 @@ class VpnBot:
             client = self.panel.find_by_uuid(uuid)
             if client:
                 email = client.get("email") or ""
-                fields = {"email": email}
+                fields = {"email": email, "enable": True}   # enable обязательно, иначе отключится
                 if (client.get("expiryTime") or 0) != expires_at * 1000:
                     fields["expiryTime"] = expires_at * 1000
+                if total_gb and (client.get("totalGB") or 0) != total_gb:
+                    fields["totalGB"] = total_gb
                 if rename_to:
                     new_email = "".join(
                         ch for ch in rename_to if ch.isalnum() or ch in "_@-")[:24] \
@@ -219,15 +223,18 @@ class VpnBot:
             return
         self.db.set_status(order_id, "paid")
         expires = self.db.grant(order["user_id"], order["days"], key)
+        plan = next((p for p in config.PLANS if p["code"] == order["plan_code"]), {})
         buyer = self.db.user(order["user_id"])
         buyer_name = buyer.get("username") or f"client{order['user_id']}"
         happ, server_name = self.sync_server_sub(
             key, expires,
             rename_to=buyer_name,
-            comment=f"Заказ #{order_id} · {order['title']}")
+            comment=f"Заказ #{order_id} · {order['title']}",
+            total_gb=plan.get("gb", 0))
         lines = [f"🎉 <b>Подписка активирована!</b>\n\n"
                  f"Тариф: {order['title']}\n"
-                 f"Действует до: <b>{time.strftime('%d.%m.%Y', time.localtime(expires))}</b>\n\n"
+                 f"Действует до: <b>{time.strftime('%d.%m.%Y', time.localtime(expires))}</b>\n"
+                 f"Трафик: <b>{plan.get('gb', 0)} ГБ</b>\n\n"
                  f"Ваш ключ (скопируйте полностью):\n"
                  f"<code>{key}</code>"]
         if happ:
