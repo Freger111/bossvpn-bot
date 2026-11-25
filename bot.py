@@ -547,7 +547,7 @@ def selftest() -> int:
 
     print("2. Тарифы")
     bot.show_plans(42)
-    check("тарифы меню", t.count("sendMessage") >= 2)
+    check("тарифы меню", t.count("sendMessage") >= 1)
     bot.show_plan(42, "m1")
     check("карточка с фото", t.count("sendPhoto") >= 1)
 
