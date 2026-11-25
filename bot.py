@@ -173,6 +173,26 @@ class VpnBot:
         else:
             self.say(chat_id, "Заказ уже нельзя отменить.")
 
+    def sync_server_sub(self, payload: str, expires_at: int) -> tuple[str, str]:
+        """Ставит срок на сервере и возвращает (happ_ссылка, email)."""
+        happ, email = "", ""
+        if not self.panel:
+            return happ, email
+        uuid = server_mod.uuid_from_payload(payload)
+        if not uuid:
+            return happ, email
+        try:
+            client = self.panel.find_by_uuid(uuid)
+            if client:
+                email = client.get("email") or ""
+                if (client.get("expiryTime") or 0) != expires_at * 1000:
+                    self.panel.update(email, {"email": email,
+                                              "expiryTime": expires_at * 1000})
+                happ = self.panel.happ_link(client["id"])
+        except Exception as exc:
+            print("sync_server_sub:", exc)
+        return happ, email
+
     def deliver(self, order_id: int) -> None:
         order = self.db.order(order_id)
         if not order or order["status"] != "awaiting":
@@ -184,14 +204,17 @@ class VpnBot:
             return
         self.db.set_status(order_id, "paid")
         expires = self.db.grant(order["user_id"], order["days"], key)
-        self.say(order["user_id"],
-                 f"🎉 <b>Подписка активирована!</b>\n\n"
+        happ, _ = self.sync_server_sub(key, expires)
+        lines = [f"🎉 <b>Подписка активирована!</b>\n\n"
                  f"Тариф: {order['title']}\n"
                  f"Действует до: <b>{time.strftime('%d.%m.%Y', time.localtime(expires))}</b>\n\n"
                  f"Ваш ключ (скопируйте полностью):\n"
-                 f"<code>{key}</code>\n\n"
-                 f"Как подключить — в разделе «📱 Инструкции».",
-                 kb.back("help", "📱 Инструкции"))
+                 f"<code>{key}</code>"]
+        if happ:
+            lines.append(f"\n📲 <b>Happ</b> — подключение в один клик, "
+                         f"там видна подписка и трафик:\n<code>{happ}</code>")
+        lines.append("\nКак подключить — в разделе «📱 Инструкции».")
+        self.say(order["user_id"], "\n".join(lines), kb.back("help", "📱 Инструкции"))
 
     # ---------- подписка ----------
     def show_sub(self, chat_id: int, user_id: int) -> None:
@@ -221,6 +244,9 @@ class VpnBot:
                         lines.append(f"Описание: {client['comment']}")
             except Exception:
                 pass
+        happ, _ = self.sync_server_sub(sub["payload"], sub["expires_at"])
+        if happ:
+            lines.append(f"\n📲 Happ (подписка и трафик видны в приложении):\n<code>{happ}</code>")
         lines.append(f"\nКлюч:\n<code>{sub['payload']}</code>")
         self.say(chat_id, "\n".join(lines), kb.back("menu", "← Меню"))
 
@@ -259,6 +285,8 @@ class VpnBot:
                 rows.append([{"text": f"#{k['id']} {name}", "callback_data": f"key:{k['id']}"}])
             rows.append([{"text": "← Админ", "callback_data": "adm"}])
             self.say(chat_id, "\n".join(lines), {"inline_keyboard": rows})
+        elif action == "keysync":
+            self.sync_keys(chat_id)
         elif action.startswith("key:"):
             key_id = int(action.split(":")[1])
             key = next((k for k in self.db.pool() if k["id"] == key_id), None)
@@ -289,6 +317,40 @@ class VpnBot:
             self.say(chat_id, "Пришлите текст одним сообщением.")
 
     # ---------- обработка ----------
+    def sync_keys(self, chat_id: int) -> None:
+        """Тянет все ссылки с панели и раскладывает по тарифам (m1 → m3 → y1)."""
+        if not self.panel:
+            self.say(chat_id, "Панель не подключена — добавьте PANEL_URL в .env.")
+            return
+        try:
+            links = self.panel.links()
+        except Exception as exc:
+            self.say(chat_id, f"Не удалось получить ключи с сервера: {exc}")
+            return
+        existing = {k["payload"] for k in self.db.pool()}
+        fresh = [l for l in links if l.startswith("vless://") and l not in existing]
+        if not fresh:
+            left = {p["code"]: self.db.keys_left(p["code"]) for p in config.PLANS}
+            self.say(chat_id,
+                     "🔄 Всё синхронизировано.\n\n" +
+                     "\n".join(f"· {config.PLANS[i]['title']}: {left[p['code']]} шт."
+                               for i, p in enumerate(config.PLANS)),
+                     kb.back("adm", "← Админ"))
+            return
+        pools: dict[str, list[str]] = {p["code"]: [] for p in config.PLANS}
+        codes = list(pools)
+        for i, link in enumerate(fresh):
+            pools[codes[i % len(codes)]].append(link)
+        for code in codes:
+            if pools[code]:
+                self.db.add_keys(code, pools[code])
+        left = {p["code"]: self.db.keys_left(p["code"]) for p in config.PLANS}
+        self.say(chat_id,
+                 f"✅ Добавлено ключей с сервера: <b>{len(fresh)}</b>\n\n" +
+                 "\n".join(f"· {config.PLANS[i]['title']}: {left[p['code']]} шт."
+                           for i, p in enumerate(config.PLANS)),
+                 kb.back("adm", "← Админ"))
+
     def apply_key_action(self, chat_id: int, task: dict, text: str) -> None:
         key = next((k for k in self.db.pool() if k["id"] == task["key_id"]), None)
         if key is None:
@@ -379,6 +441,13 @@ class VpnBot:
                 self.db.set_status(order_id, "rejected")
                 self.say(order["user_id"], "❌ Оплата не подтверждена. Свяжитесь с поддержкой.")
             self.say(chat_id, "Отклонено.")
+
+        # старое сообщение с кнопкой удаляем — остаётся только новое
+        try:
+            self.tg.call("deleteMessage", chat_id=chat_id,
+                         message_id=query["message"]["message_id"])
+        except Exception:
+            pass
 
     def poll(self) -> None:
         while True:
