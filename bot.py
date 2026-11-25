@@ -130,22 +130,8 @@ class VpnBot:
         self.send_banner(chat_id, caption, kb.main_menu(self.is_admin(user_id)))
 
     def show_plans(self, chat_id: int) -> None:
-        self.say(chat_id, "🛡 <b>Тарифы</b>\n\nЛистайте карточки 👇")
-        for plan in config.PLANS:
-            left = self.db.keys_left(plan["code"])
-            caption = (f"🛡 <b>{plan['title']}</b>\n\n"
-                       f"📅 {plan['days']} дней\n"
-                       f"📦 {plan['gb']} ГБ трафика\n"
-                       f"💰 <b>{kb.money(plan['price'])}</b>\n"
-                       f"🔑 в наличии: {left}")
-            self.say_photo(chat_id, config.plan_image(plan["code"]), caption,
-                           {"inline_keyboard": [[
-                               {"text": f"💳 Купить за {kb.money(plan['price'])}",
-                                "callback_data": f"buy:{plan['code']}"},
-                               {"text": "ℹ️ Подробнее",
-                                "callback_data": f"plan:{plan['code']}"},
-                           ]]})
-        self.say(chat_id, "◀️ Меню", kb.back("menu", "◀️ Меню"))
+        self.say(chat_id, "🛡 <b>Тарифы</b>\n\nВыберите тариф — откроется фото и описание 👇",
+                 kb.plans())
 
     def show_plan(self, chat_id: int, plan_code: str) -> None:
         plan = next((p for p in config.PLANS if p["code"] == plan_code), None)
