@@ -24,14 +24,15 @@ CREATE TABLE IF NOT EXISTS keys_pool (
     created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS orders (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id    INTEGER NOT NULL,
-    plan_code  TEXT NOT NULL,
-    title      TEXT NOT NULL,
-    price      INTEGER NOT NULL,
-    days       INTEGER NOT NULL,
-    status     TEXT NOT NULL DEFAULT 'new',
-    created_at INTEGER NOT NULL
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id      INTEGER NOT NULL,
+    plan_code    TEXT NOT NULL,
+    title        TEXT NOT NULL,
+    price        INTEGER NOT NULL,
+    days         INTEGER NOT NULL,
+    balance_used INTEGER NOT NULL DEFAULT 0,
+    status       TEXT NOT NULL DEFAULT 'new',
+    created_at   INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS subs (
     user_id    INTEGER NOT NULL,
@@ -53,6 +54,10 @@ class Storage:
         self.db.row_factory = sqlite3.Row
         with self.lock:
             self.db.executescript(SCHEMA)
+            cols = {r["name"] for r in self.db.execute("PRAGMA table_info(orders)")}
+            if "balance_used" not in cols:
+                self.db.execute(
+                    "ALTER TABLE orders ADD COLUMN balance_used INTEGER NOT NULL DEFAULT 0")
             cols = {r["name"] for r in self.db.execute("PRAGMA table_info(keys_pool)")}
             if "comment" not in cols:
                 self.db.execute(
@@ -128,13 +133,15 @@ class Storage:
             return row["payload"]
 
     # ---------- заказы ----------
-    def create_order(self, user_id: int, plan: dict) -> int:
+    def create_order(self, user_id: int, plan: dict, price: int | None = None,
+                     balance_used: int = 0) -> int:
         with self.lock:
             cur = self.db.execute(
-                "INSERT INTO orders(user_id, plan_code, title, price, days, created_at)"
-                " VALUES(?,?,?,?,?,?)",
-                (user_id, plan["code"], plan["title"], plan["price"], plan["days"],
-                 int(time.time())))
+                "INSERT INTO orders(user_id, plan_code, title, price, days, balance_used,"
+                " created_at) VALUES(?,?,?,?,?,?,?)",
+                (user_id, plan["code"], plan["title"],
+                 plan["price"] if price is None else price, plan["days"],
+                 balance_used, int(time.time())))
             self.db.commit()
             return int(cur.lastrowid)
 
