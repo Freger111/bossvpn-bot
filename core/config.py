@@ -32,6 +32,7 @@ ADMINS = {int(x) for x in os.environ.get("ADMIN_IDS", "").replace(" ", "").split
 
 BRAND = os.environ.get("BRAND", "БоссVPN")
 SUPPORT = os.environ.get("SUPPORT", "@bossvphbot")
+BOT_USER = os.environ.get("BOT_USERNAME", "bossVPHbot")
 PAY_SBP = os.environ.get("PAY_SBP", "+7 900 000-00-00")
 PAY_NAME = os.environ.get("PAY_NAME", "Т-Банк")
 TRIAL_DAYS = int(os.environ.get("TRIAL_DAYS", "0"))   # 0 — без пробного периода
