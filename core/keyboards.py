@@ -26,11 +26,14 @@ def main_menu(admin: bool = False) -> dict:
 
 
 def plans() -> dict:
+    icons = {"m1": "🛡", "m3": "🚀", "y1": "👑", "p1": "⚡"}
     rows = []
     for plan in config.PLANS:
-        rows.append([{"text": f"{plan['title']} — {money(plan['price'])}",
+        icon = icons.get(plan["code"], "🛡")
+        rows.append([{"text": f"{icon} {plan['title']} — {money(plan['price'])}"
+                              f" · {plan.get('gb', 0)} ГБ",
                       "callback_data": f"plan:{plan['code']}"}])
-    rows.append([{"text": "← Меню", "callback_data": "menu"}])
+    rows.append([{"text": "◀️ Меню", "callback_data": "menu"}])
     return {"inline_keyboard": rows}
 
 
