@@ -173,8 +173,9 @@ class VpnBot:
         else:
             self.say(chat_id, "Заказ уже нельзя отменить.")
 
-    def sync_server_sub(self, payload: str, expires_at: int) -> tuple[str, str]:
-        """Ставит срок на сервере и возвращает (happ_ссылка, email)."""
+    def sync_server_sub(self, payload: str, expires_at: int,
+                        rename_to: str = "", comment: str = "") -> tuple[str, str]:
+        """Ставит срок на сервере, переименовывает клиента и возвращает Happ-ссылку."""
         happ, email = "", ""
         if not self.panel:
             return happ, email
@@ -185,9 +186,23 @@ class VpnBot:
             client = self.panel.find_by_uuid(uuid)
             if client:
                 email = client.get("email") or ""
+                fields = {"email": email}
                 if (client.get("expiryTime") or 0) != expires_at * 1000:
-                    self.panel.update(email, {"email": email,
-                                              "expiryTime": expires_at * 1000})
+                    fields["expiryTime"] = expires_at * 1000
+                if rename_to:
+                    new_email = "".join(
+                        ch for ch in rename_to if ch.isalnum() or ch in "_@-")[:24] \
+                        or f"client{uuid[:6]}"
+                    taken = any(c["email"] == new_email and c["uuid"] != uuid
+                                for c in self.panel.list_clients())
+                    if taken:
+                        new_email += f"-{uuid[:6]}"
+                    fields["email"] = new_email
+                    email = new_email
+                if comment and (client.get("comment") or "") != comment:
+                    fields["comment"] = comment
+                if len(fields) > 1 or fields.get("email") != client.get("email"):
+                    self.panel.update(client.get("email") or "", fields)
                 happ = self.panel.happ_link(client["id"])
         except Exception as exc:
             print("sync_server_sub:", exc)
@@ -204,7 +219,12 @@ class VpnBot:
             return
         self.db.set_status(order_id, "paid")
         expires = self.db.grant(order["user_id"], order["days"], key)
-        happ, _ = self.sync_server_sub(key, expires)
+        buyer = self.db.user(order["user_id"])
+        buyer_name = buyer.get("username") or f"client{order['user_id']}"
+        happ, server_name = self.sync_server_sub(
+            key, expires,
+            rename_to=buyer_name,
+            comment=f"Заказ #{order_id} · {order['title']}")
         lines = [f"🎉 <b>Подписка активирована!</b>\n\n"
                  f"Тариф: {order['title']}\n"
                  f"Действует до: <b>{time.strftime('%d.%m.%Y', time.localtime(expires))}</b>\n\n"
