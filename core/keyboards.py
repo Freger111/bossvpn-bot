@@ -11,12 +11,17 @@ def money(value: int) -> str:
 def main_menu(admin: bool = False) -> dict:
     rows = [
         [{"text": "🛡 Купить VPN", "callback_data": "plans"}],
-        [{"text": "🔑 Моя подписка", "callback_data": "my"}],
-        [{"text": "📱 Инструкции", "callback_data": "help"}],
-        [{"text": "💬 Поддержка", "callback_data": "support"}],
+        [
+            {"text": "🔑 Моя подписка", "callback_data": "my"},
+            {"text": "📱 Инструкции", "callback_data": "help"},
+        ],
+        [
+            {"text": "💬 Поддержка", "callback_data": "support"},
+            {"text": "⚡ Premium", "callback_data": "plan:p1"},
+        ],
     ]
     if admin:
-        rows.append([{"text": "⚙️ Админ", "callback_data": "adm"}])
+        rows.append([{"text": "⚙️ Админ-панель", "callback_data": "adm"}])
     return {"inline_keyboard": rows}
 
 
