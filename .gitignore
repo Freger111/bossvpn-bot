@@ -1,0 +1,12 @@
+# секреты и данные
+.env
+data/
+*.db
+*.log
+*.err
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/

@@ -1,0 +1,59 @@
+"""Настройки VPN-бота."""
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent          # core/
+BASE = ROOT.parent                              # корень проекта
+DATA = BASE / "data"
+DATA.mkdir(exist_ok=True)
+DB_PATH = DATA / "vpn.db"
+
+
+def load_env() -> None:
+    env = BASE / ".env"
+    if not env.exists():
+        return
+    for line in env.read_text(encoding="utf-8-sig").splitlines():
+        line = line.strip().lstrip("\ufeff")
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+load_env()
+
+VERSION = "1.0"
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+ADMINS = {int(x) for x in os.environ.get("ADMIN_IDS", "").replace(" ", "").split(",")
+          if x.strip().isdigit()}
+
+BRAND = os.environ.get("BRAND", "БоссVPN")
+SUPPORT = os.environ.get("SUPPORT", "@bossvphbot")
+PAY_SBP = os.environ.get("PAY_SBP", "+7 900 000-00-00")
+PAY_NAME = os.environ.get("PAY_NAME", "Т-Банк")
+TRIAL_DAYS = int(os.environ.get("TRIAL_DAYS", "0"))   # 0 — без пробного периода
+REF_PERCENT = int(os.environ.get("REF_PERCENT", "20"))
+
+PANEL_URL = os.environ.get("PANEL_URL", "")
+PANEL_USER = os.environ.get("PANEL_USER", "admin")
+PANEL_PASS = os.environ.get("PANEL_PASS", "")
+
+BLACK = (8, 10, 16)
+CYAN = (58, 215, 255)
+WHITE = (245, 247, 252)
+GREY = (140, 148, 175)
+
+BANNER = BASE / "vpn_brand" / "banner_1280x640.png"
+AVATAR = BASE / "vpn_brand" / "avatar_512.png"
+
+PLANS = [
+    {"code": "m1", "title": "1 месяц", "days": 30, "price": 199,
+     "note": "1 устройство"},
+    {"code": "m3", "title": "3 месяца", "days": 90, "price": 499,
+     "note": "до 3 устройств · выгоднее на 17%"},
+    {"code": "y1", "title": "12 месяцев", "days": 365, "price": 1490,
+     "note": "до 5 устройств · выгоднее на 38%"},
+]
