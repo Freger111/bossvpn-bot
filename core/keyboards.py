@@ -19,6 +19,7 @@ def main_menu(admin: bool = False) -> dict:
             {"text": "💬 Поддержка", "callback_data": "support"},
             {"text": "⚡ Premium", "callback_data": "plan:p1"},
         ],
+        [{"text": "🎁 Пригласить друга", "callback_data": "invite"}],
     ]
     if admin:
         rows.append([{"text": "⚙️ Админ-панель", "callback_data": "adm"}])
