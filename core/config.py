@@ -44,6 +44,8 @@ PANEL_PASS = os.environ.get("PANEL_PASS", "")
 
 YOOKASSA_SHOP_ID = os.environ.get("YOOKASSA_SHOP_ID", "")
 YOOKASSA_SECRET = os.environ.get("YOOKASSA_SECRET", "")
+LAVA_SHOP_ID = os.environ.get("LAVA_SHOP_ID", "")
+LAVA_SECRET = os.environ.get("LAVA_SECRET", "")
 REMIND_DAYS = int(os.environ.get("REMIND_DAYS", "3"))
 
 BLACK = (8, 10, 16)
