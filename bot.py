@@ -80,6 +80,7 @@ class VpnBot:
         self.username = ""
         self.awaiting_key: dict[int, dict] = {}
         self.awaiting_review: dict[int, int] = {}
+        self.awaiting_promo: set[int] = set()
         self.panels: dict[str, server_mod.Panel] = {}
         self._last_card_check = 0.0
         self._last_remind = 0.0
@@ -157,15 +158,22 @@ class VpnBot:
                    f"🔒 VLESS · Reality — стабильно и незаметно\n"
                    f"💳 СБП или карта — ключ приходит прямо в чат\n\n"
                    f"Тарифы от <b>{from_price} ₽/мес</b> 👇")
-        self.send_banner(chat_id, caption, kb.main_menu(self.is_admin(user_id)))
+        self.send_banner(chat_id, caption, self.menu(user_id))
 
-    def show_plans(self, chat_id: int) -> None:
-        self.say(chat_id, "🛡 <b>Выберите тариф</b>\n\n"
-                          "Чем дольше срок — тем дешевле месяц.\n"
-                          "Во всех тарифах: без логов · VLESS · Reality · iOS / Android / Windows",
-                 kb.plans())
+    def menu(self, user_id: int) -> dict:
+        trial = config.TRIAL_DAYS if self.trial_available(user_id) else 0
+        return kb.main_menu(self.is_admin(user_id), trial)
 
-    def show_plan(self, chat_id: int, plan_code: str) -> None:
+    def show_plans(self, chat_id: int, user_id: int = 0) -> None:
+        text = ("🛡 <b>Выберите тариф</b>\n\n"
+                "Чем дольше срок — тем дешевле месяц.\n"
+                "Во всех тарифах: без логов · VLESS · Reality · iOS / Android / Windows")
+        code, percent = self.user_promo(user_id)
+        if percent:
+            text += f"\n\n🏷 Промокод <b>{code}</b>: скидка {percent}% на покупку"
+        self.say(chat_id, text, kb.plans())
+
+    def show_plan(self, chat_id: int, plan_code: str, user_id: int = 0) -> None:
         plan = next((p for p in config.PLANS if p["code"] == plan_code), None)
         if plan is None:
             return
@@ -179,12 +187,16 @@ class VpnBot:
                 f"🌍 {places}\n"
                 f"⚡ VLESS · Reality\n\n"
                 f"💡 Выходит ≈ <b>{kb.per_month(plan)} ₽ в месяц</b>")
+        code, percent = self.user_promo(user_id)
+        if percent:
+            text += (f"\n\n🏷 С промокодом {code}: "
+                     f"<b>{kb.money(kb.discounted(plan['price'], percent))}</b>")
         if left == 0:
             text += "\n\n⏳ Ключи временно закончились — скоро пополним."
         elif left <= 5:
             text += f"\n\n🔥 Осталось ключей: {left}"
         self.say_photo(chat_id, config.plan_image(plan_code), text,
-                       kb.plan_card(plan_code))
+                       kb.plan_card(plan_code, percent))
 
     # ---------- покупка ----------
     def start_purchase(self, chat_id: int, user_id: int, plan_code: str,
@@ -205,17 +217,25 @@ class VpnBot:
                 return
             location = available[0] if available else ""
         user = self.db.ensure_user(user_id)
+        promo, percent = self.user_promo(user_id)
+        full = kb.discounted(plan["price"], percent)
         balance = user.get("balance") or 0
-        balance_used = min(balance, plan["price"])
-        price = plan["price"] - balance_used
+        balance_used = min(balance, full)
+        price = full - balance_used
         order_id = self.db.create_order(user_id, plan, price=price, balance_used=balance_used,
-                                        location=location)
+                                        location=location, promo=promo if percent else "")
         if balance_used:
             self.db.add_balance(user_id, -balance_used)
+        if price == 0:
+            self.db.set_status(order_id, "awaiting")
+            self.deliver(order_id)
+            return
         text = f"🧾 <b>Заказ #{order_id}</b> · {plan['title']}\n\n"
         if location and len(config.LOCATIONS) > 1:
             text += f"Сервер: {config.location(location)['name']}\n"
         text += f"К оплате: <b>{kb.money(price)}</b>"
+        if percent:
+            text += f"\n🏷 Промокод {promo}: −{percent}%"
         if balance_used:
             text += f"\n🎁 Бонусами списано: {kb.money(balance_used)}"
         text += (f"\n\n<b>Оплата по СБП</b>\n"
@@ -446,6 +466,8 @@ class VpnBot:
                      f"пришлём ключ в ближайшее время. Вопросы: {config.SUPPORT}")
             return
         self.db.set_status(order_id, "paid")
+        if order.get("promo"):
+            self.db.use_promo(order["promo"], order["user_id"])
         expires = self.db.grant(order["user_id"], order["days"], key)
         # реферальное вознаграждение 15% от фактически оплаченной суммы
         buyer = self.db.user(order["user_id"])
@@ -462,18 +484,143 @@ class VpnBot:
             comment=f"Заказ #{order_id} · {order['title']}",
             total_gb=plan.get("gb", 0),
             limit_ip=plan.get("devices", 0))
-        lines = [f"🎉 <b>Готово! VPN активирован</b>\n\n"
-                 f"📦 Тариф: {order['title']}\n"
+        self.say(order["user_id"],
+                 self.key_text("🎉 <b>Готово! VPN активирован</b>", order["title"], expires,
+                               plan.get("gb", 0), plan.get("devices", 1), key, happ),
+                 kb.back("help", "📱 Как подключить"))
+
+    @staticmethod
+    def key_text(head: str, title: str, expires: int, gb: int, devices: int,
+                 key: str, happ: str) -> str:
+        lines = [f"{head}\n\n"
+                 f"📦 Тариф: {title}\n"
                  f"📅 Действует до: <b>{time.strftime('%d.%m.%Y', time.localtime(expires))}</b>\n"
-                 f"📊 Трафик: <b>{plan.get('gb', 0)} ГБ</b>\n"
-                 f"📱 Устройств: <b>{plan.get('devices', 1)}</b>\n\n"
+                 f"📊 Трафик: <b>{gb} ГБ</b>\n"
+                 f"📱 Устройств: <b>{devices}</b>\n\n"
                  f"🔑 <b>Ваш ключ</b> — нажмите, чтобы скопировать:\n"
                  f"<code>{key}</code>"]
         if happ:
             lines.append(f"\n📲 <b>Happ</b> — подключение в один клик, "
                          f"там видна подписка и трафик:\n<code>{happ}</code>")
         lines.append("\nВставьте ключ в приложение — пошаговая инструкция по кнопке ниже.")
-        self.say(order["user_id"], "\n".join(lines), kb.back("help", "📱 Как подключить"))
+        return "\n".join(lines)
+
+    # ---------- пробный период ----------
+    def trial_available(self, user_id: int) -> bool:
+        if config.TRIAL_DAYS <= 0 or not user_id:
+            return False
+        user = self.db.user(user_id)
+        return bool(user) and not user.get("trial_used") and not self.db.sub(user_id) \
+            and not self.db.has_paid(user_id)
+
+    def start_trial(self, chat_id: int, user_id: int, frm: dict) -> None:
+        if not self.trial_available(user_id):
+            self.say(chat_id, "🎁 Пробный период уже использован. Выберите тариф — "
+                              "от 49 ₽ в месяц.", kb.back("plans", "🛡 Тарифы"))
+            return
+        plan = config.PLANS[0]
+        location = next((loc["code"] for loc in config.LOCATIONS
+                         if self.db.keys_left(plan["code"], loc["code"])), "")
+        if not location:
+            self.say(chat_id, "⏳ Пробные ключи временно закончились — скоро пополним. "
+                              "А пока можно выбрать тариф.", kb.back("plans", "🛡 Тарифы"))
+            return
+        trial = {"code": plan["code"], "title": "Пробный период",
+                 "days": config.TRIAL_DAYS, "price": 0}
+        order_id = self.db.create_order(user_id, trial, location=location)
+        key = self.db.take_key(plan["code"], order_id, location)
+        if key is None:
+            self.db.set_status(order_id, "canceled")
+            return
+        self.db.set_status(order_id, "trial")
+        self.db.set_trial_used(user_id)
+        expires = self.db.grant(user_id, config.TRIAL_DAYS, key)
+        happ, _ = self.sync_server_sub(
+            key, expires, rename_to=frm.get("username") or f"client{user_id}",
+            comment="Пробный период", total_gb=config.TRIAL_GB, limit_ip=1)
+        self.say(chat_id,
+                 self.key_text(f"🎁 <b>Пробный период на {kb.days_word(config.TRIAL_DAYS)}"
+                               f" активирован</b>", "Пробный", expires,
+                               config.TRIAL_GB, 1, key, happ),
+                 kb.back("help", "📱 Как подключить"))
+
+    # ---------- промокоды ----------
+    @staticmethod
+    def norm_code(code: str) -> str:
+        return "".join(ch for ch in code.upper() if ch.isalnum() or ch == "_")[:32]
+
+    def promo_error(self, code: str, user_id: int) -> str:
+        promo = self.db.promo(code)
+        if not promo:
+            return "Такого промокода нет. Проверьте написание."
+        if promo["max_uses"] and promo["used"] >= promo["max_uses"]:
+            return "Этот промокод закончился."
+        if self.db.promo_used_by(code, user_id):
+            return "Вы уже использовали этот промокод."
+        return ""
+
+    def user_promo(self, user_id: int) -> tuple[str, int]:
+        if not user_id:
+            return "", 0
+        code = self.db.user(user_id).get("promo") or ""
+        if not code or self.promo_error(code, user_id):
+            return "", 0
+        return code, int(self.db.promo(code)["percent"])
+
+    def apply_promo(self, chat_id: int, user_id: int, raw: str) -> None:
+        code = self.norm_code(raw)
+        error = self.promo_error(code, user_id) if code else "Промокод пустой."
+        if error:
+            self.say(chat_id, f"❌ {error}", kb.back("plans", "🛡 Тарифы"))
+            return
+        self.db.set_user_promo(user_id, code)
+        self.say(chat_id, f"✅ Промокод <b>{code}</b> применён: скидка "
+                          f"<b>{self.db.promo(code)['percent']}%</b> на покупку.",
+                 kb.back("plans", "🛡 Выбрать тариф"))
+
+    def admin_promo(self, chat_id: int, text: str) -> None:
+        parts = text.split()
+        if parts[0] == "/delpromo" and len(parts) == 2:
+            code = self.norm_code(parts[1])
+            done = self.db.delete_promo(code)
+            self.say(chat_id, f"🗑 Промокод {code} удалён." if done else "Нет такого промокода.")
+            return
+        if parts[0] == "/newpromo" and len(parts) in (3, 4) \
+                and all(x.isdigit() for x in parts[2:]) and 1 <= int(parts[2]) <= 100:
+            code = self.norm_code(parts[1])
+            limit = int(parts[3]) if len(parts) == 4 else 0
+            self.db.save_promo(code, int(parts[2]), limit)
+            link = f"https://t.me/{config.BOT_USER}?start=promo_{code}"
+            self.say(chat_id, f"✅ Промокод <b>{code}</b>: −{parts[2]}%, "
+                              f"{'до ' + str(limit) + ' активаций' if limit else 'без лимита'}.\n\n"
+                              f"Ссылка, которая сразу применит код:\n<code>{link}</code>")
+            return
+        self.say(chat_id, "Формат:\n<code>/newpromo КОД ПРОЦЕНТ [ЛИМИТ]</code>\n"
+                          "<code>/delpromo КОД</code>")
+
+    # ---------- возврат ушедших ----------
+    def send_winbacks(self) -> None:
+        if config.WINBACK_PERCENT <= 0:
+            return
+        code = f"BACK{config.WINBACK_PERCENT}"
+        if not self.db.promo(code):
+            self.db.save_promo(code, config.WINBACK_PERCENT)
+        for sub in self.db.winback_candidates(config.WINBACK_AFTER_DAYS):
+            user_id = sub["user_id"]
+            self.db.set_winback(user_id, sub["expires_at"])
+            head = ("🎁 <b>Пробный период закончился</b>" if not self.db.has_paid(user_id)
+                    else "💙 <b>Скучаем!</b> Ваша подписка закончилась")
+            text = f"{head}\n\n"
+            if not self.promo_error(code, user_id) and not self.user_promo(user_id)[1]:
+                self.db.set_user_promo(user_id, code)
+                text += (f"Дарим скидку <b>{config.WINBACK_PERCENT}%</b> на любой тариф — "
+                         f"она уже применена, просто выберите срок 👇")
+            else:
+                text += "Возвращайтесь — ключ придёт сразу после оплаты 👇"
+            try:
+                self.say(user_id, text, kb.back("plans", "🛡 Выбрать тариф"))
+            except Exception as exc:
+                print("winback:", exc)
 
     # ---------- подписка ----------
     def show_sub(self, chat_id: int, user_id: int) -> None:
@@ -547,6 +694,17 @@ class VpnBot:
                      f"Оплаченных заказов: {stats['paid_orders']}\n"
                      f"Выручка: {kb.money(stats['revenue'])}",
                      kb.back("adm", "← Админ"))
+        elif action == "promos":
+            lines = ["🏷 <b>Промокоды</b>\n"]
+            for p in self.db.promos():
+                limit = f"/{p['max_uses']}" if p["max_uses"] else ""
+                lines.append(f"<code>{p['code']}</code> · −{p['percent']}% · "
+                             f"использован {p['used']}{limit}")
+            if len(lines) == 1:
+                lines.append("Пока нет.")
+            lines.append("\nСоздать: <code>/newpromo КОД ПРОЦЕНТ [ЛИМИТ]</code>\n"
+                         "Удалить: <code>/delpromo КОД</code>")
+            self.say(chat_id, "\n".join(lines), kb.back("adm", "← Админ"))
         elif action == "reviews":
             st = self.db.review_stats()
             lines = ["⭐ <b>Отзывы</b>\n",
@@ -696,6 +854,10 @@ class VpnBot:
         if user_id in self.awaiting_review and text and not text.startswith("/"):
             self.save_review_text(chat_id, user_id, frm, text)
             return
+        if user_id in self.awaiting_promo and text and not text.startswith("/"):
+            self.awaiting_promo.discard(user_id)
+            self.apply_promo(chat_id, user_id, text)
+            return
 
         if text.startswith("/start"):
             payload = text.split(maxsplit=1)[1].strip() if len(text.split(maxsplit=1)) > 1 else ""
@@ -706,7 +868,13 @@ class VpnBot:
                 source = "ref"
             elif payload.startswith("src_"):
                 source = "src_" + payload[4:]
+            elif payload.startswith("promo_"):
+                source = "promo_" + self.norm_code(payload[6:])
             self.welcome(chat_id, user_id, frm.get("username", ""), ref_id, source)
+            if payload.startswith("promo_"):
+                self.apply_promo(chat_id, user_id, payload[6:])
+        elif text.startswith(("/newpromo", "/delpromo")) and self.is_admin(user_id):
+            self.admin_promo(chat_id, text)
         elif text.startswith("/id"):
             self.say(chat_id, f"Ваш Telegram ID: <code>{user_id}</code>")
         elif text.startswith("/version"):
@@ -724,11 +892,11 @@ class VpnBot:
         self.tg.call("answerCallbackQuery", callback_query_id=query["id"])
 
         if data == "menu":
-            self.say(chat_id, "🏠 <b>Главное меню</b>", kb.main_menu(self.is_admin(user_id)))
+            self.say(chat_id, "🏠 <b>Главное меню</b>", self.menu(user_id))
         elif data == "plans":
-            self.show_plans(chat_id)
+            self.show_plans(chat_id, user_id)
         elif data.startswith("plan:"):
-            self.show_plan(chat_id, data[5:])
+            self.show_plan(chat_id, data[5:], user_id)
         elif data.startswith("buy:"):
             plan_code, _, location = data[4:].partition(":")
             self.start_purchase(chat_id, user_id, plan_code, location)
@@ -738,6 +906,12 @@ class VpnBot:
             self.cancel_order(chat_id, user_id, int(data[7:]))
         elif data == "my":
             self.show_sub(chat_id, user_id)
+        elif data == "trial":
+            self.start_trial(chat_id, user_id, frm)
+        elif data == "promo":
+            self.awaiting_promo.add(user_id)
+            self.say(chat_id, "🏷 Отправьте промокод одним сообщением.",
+                     kb.back("plans", "← Тарифы"))
         elif data == "help":
             self.say(chat_id, kb.HELP.format(brand=config.BRAND))
         elif data == "support":
@@ -843,6 +1017,7 @@ class VpnBot:
             self._last_remind = now
             self.send_reminders()
             self.send_review_requests()
+            self.send_winbacks()
 
     def send_reminders(self) -> None:
         today = time.strftime("%Y-%m-%d")
@@ -953,11 +1128,11 @@ class VpnBot:
         text = text[:1000]
         self.db.set_review_text(review_id, text)
         if review["rating"] >= 4:
-            self.say(chat_id, "💙 Спасибо! Нам очень приятно.", kb.main_menu(self.is_admin(user_id)))
+            self.say(chat_id, "💙 Спасибо! Нам очень приятно.", self.menu(user_id))
         else:
             self.say(chat_id, f"Спасибо, что написали. Поддержка уже в курсе и свяжется с вами. "
                               f"Если срочно — {config.SUPPORT}",
-                     kb.main_menu(self.is_admin(user_id)))
+                     self.menu(user_id))
         markup = None
         if config.REVIEWS_CHANNEL and review["rating"] >= 4:
             markup = {"inline_keyboard": [[{"text": "📢 Опубликовать в канал",
@@ -1105,6 +1280,46 @@ def selftest() -> int:
     sent = t.count("sendMessage")
     bot.check_health()
     check("повторно не спамим", t.count("sendMessage") == sent)
+
+    print("10. Пробный период")
+    config.TRIAL_DAYS = 1
+    revenue = db.stats()["revenue"]
+    db.ensure_user(77, "new77")
+    check("кнопка пробного у новичка", "trial" in json.dumps(bot.menu(77)))
+    check("нет кнопки у покупателя", "trial" not in json.dumps(bot.menu(42)))
+    db.add_keys("m1", ["vless://trial-key"])
+    bot.on_callback({"id": "q", "data": "trial", "from": {"id": 77, "username": "new77"},
+                     "message": {"chat": {"id": 77}, "message_id": 1}})
+    check("пробный ключ выдан", db.sub(77).get("payload") == "vless://trial-key"
+          and "Пробный период" in t.calls[-2][1]["text"])
+    check("второй раз нельзя", not bot.trial_available(77))
+    check("пробный не в выручке", db.stats()["revenue"] == revenue)
+
+    print("11. Промокоды")
+    bot.on_message({"chat": {"id": 1}, "from": {"id": 1}, "text": "/newpromo boss20 20 1"})
+    check("админ создал промокод", db.promo("BOSS20").get("percent") == 20)
+    bot.on_message({"chat": {"id": 77}, "from": {"id": 77}, "text": "/start promo_BOSS20"})
+    check("применён по ссылке", bot.user_promo(77) == ("BOSS20", 20))
+    db.add_keys("m3", ["vless://promo-key"])
+    bot.start_purchase(77, 77, "m3")
+    order = db.recent_orders(1)[0]
+    check("цена со скидкой", order["price"] == kb.discounted(199, 20) and "−20%" in t.calls[-1][1]["text"])
+    db.set_status(order["id"], "awaiting")
+    bot.deliver(order["id"])
+    check("лимит исчерпан", db.promo("BOSS20")["used"] == 1 and bot.user_promo(77)[1] == 0)
+    bot.on_callback({"id": "q", "data": "promo", "from": {"id": 42},
+                     "message": {"chat": {"id": 42}, "message_id": 1}})
+    bot.on_message({"chat": {"id": 42}, "from": {"id": 42}, "text": "boss20"})
+    check("закончившийся код не принят", "закончился" in t.calls[-1][1]["text"])
+
+    print("12. Возврат ушедших")
+    db.db.execute("UPDATE subs SET expires_at = ? WHERE user_id = 42", (int(time.time()) - 3 * 86400,))
+    bot.send_winbacks()
+    check("ушедшему пришла скидка", t.calls[-1][1].get("chat_id") == 42
+          and bot.user_promo(42)[1] == config.WINBACK_PERCENT)
+    sent = t.count("sendMessage")
+    bot.send_winbacks()
+    check("один раз", t.count("sendMessage") == sent)
 
     print("\nИтог:", "всё работает" if ok else "есть ошибки")
     return 0 if ok else 1
