@@ -57,33 +57,40 @@ def status(payment: dict) -> str:
 
 # ---------------------------------------------------------------- Lava
 LAVA = "https://api.lava.ru"
+import hashlib
+import hmac as _hmac
+
+
+def _lava_signature(secret: str, data: dict) -> str:
+    """HMAC-SHA256 от JSON с отсортированными ключами (как в официальном SDK)."""
+    payload = json.dumps(dict(sorted(data.items())), ensure_ascii=False,
+                         separators=(",", ":"), sort_keys=True)
+    return _hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+
+
+def _lava_post(secret: str, path: str, data: dict) -> dict:
+    data["signature"] = _lava_signature(secret, data)
+    req = urllib.request.Request(
+        LAVA + path,
+        data=json.dumps(data, ensure_ascii=False).encode(),
+        headers={"Accept": "application/json", "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        return {"error": exc.read().decode("utf-8", "replace")[:300]}
 
 
 def lava_create_invoice(shop_id: str, secret: str, amount_rub: int, order_id: int) -> str:
     """Создаёт счёт в Lava, возвращает ссылку на оплату."""
-    req = urllib.request.Request(
-        LAVA + "/business/invoice/create",
-        data=json.dumps({"sum": float(amount_rub), "orderId": str(order_id),
-                         "shopId": shop_id, "expire": 60,
-                         "comment": f"БоссVPN заказ #{order_id}"}).encode(),
-        headers={"Authorization": secret, "Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        return ""
-    return ((data.get("data") or {}).get("url")) or ""
+    data = {"sum": float(amount_rub), "orderId": str(order_id), "shopId": shop_id,
+            "expire": 60, "comment": f"БоссVPN заказ #{order_id}"}
+    result = _lava_post(secret, "/business/invoice/create", data)
+    return ((result.get("data") or {}).get("url")) or ""
 
 
 def lava_status(shop_id: str, secret: str, order_id: int) -> str:
-    """status: success / pending / fail / None."""
-    req = urllib.request.Request(
-        LAVA + "/business/invoice/status",
-        data=json.dumps({"shopId": shop_id, "orderId": str(order_id)}).encode(),
-        headers={"Authorization": secret, "Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except Exception:
-        return "unknown"
-    return ((data.get("data") or {}).get("status")) or "unknown"
+    """status: success / fail / pending / unknown."""
+    result = _lava_post(secret, "/business/invoice/status",
+                        {"shopId": shop_id, "orderId": str(order_id)})
+    return ((result.get("data") or {}).get("status")) or "unknown"
