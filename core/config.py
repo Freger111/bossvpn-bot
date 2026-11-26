@@ -87,6 +87,47 @@ LOW_KEYS = int(os.environ.get("LOW_KEYS", "3"))   # предупреждать �
 REVIEW_AFTER_DAYS = int(os.environ.get("REVIEW_AFTER_DAYS", "3"))   # 0 — не спрашивать отзыв
 REVIEWS_CHANNEL = os.environ.get("REVIEWS_CHANNEL", "")   # @канал для публикации отзывов
 
+# Настройки, которые админ меняет прямо в боте (хранятся в БД и перекрывают .env)
+EDITABLE = [
+    ("TRIAL_DAYS", "🎁 Пробный период, дней", "0 — выключен"),
+    ("WINBACK_PERCENT", "💙 Скидка ушедшим, %", "0 — не писать ушедшим"),
+    ("WINBACK_AFTER_DAYS", "💙 Писать ушедшим через, дней", ""),
+    ("REF_PERCENT", "👥 Бонус за друга, %", ""),
+    ("REMIND_DAYS", "⏳ Напоминать до конца, дней", ""),
+    ("REVIEW_AFTER_DAYS", "⭐ Просить отзыв через, дней", "0 — не просить"),
+    ("LOW_KEYS", "🔑 Алерт, если ключей ≤", ""),
+    ("REVIEWS_CHANNEL", "📢 Канал отзывов", "@канал, «-» — очистить"),
+    ("PAY_SBP", "💳 Номер СБП", ""),
+    ("PAY_NAME", "🏦 Банк", ""),
+    ("SUPPORT", "💬 Поддержка", "@username"),
+]
+ENV_LOCATIONS = [dict(loc) for loc in LOCATIONS]
+
+
+def set_value(key: str, raw: str) -> str:
+    """Проверяет и применяет значение. Возвращает текст ошибки или пустую строку."""
+    raw = raw.strip()
+    if isinstance(globals()[key], int):
+        if not raw.isdigit():
+            return "Нужно целое число 0 или больше."
+        value = int(raw)
+        if key.endswith("PERCENT") and value > 100:
+            return "Процент — от 0 до 100."
+        globals()[key] = value
+    else:
+        if not raw:
+            return "Пустое значение."
+        globals()[key] = "" if raw == "-" else raw[:100]
+    return ""
+
+
+def set_locations(extra: list[dict]) -> None:
+    """Локации из .env плюс добавленные в боте (по коду — бот важнее)."""
+    merged = {loc["code"]: dict(loc) for loc in ENV_LOCATIONS}
+    for loc in extra:
+        merged[loc["code"]] = dict(loc)
+    LOCATIONS[:] = list(merged.values())
+
 BLACK = (8, 10, 16)
 CYAN = (58, 215, 255)
 WHITE = (245, 247, 252)

@@ -112,7 +112,11 @@ def admin_panel() -> dict:
             {"text": "🔑 Ключей в наличии", "callback_data": "adm:keys"},
             {"text": "⭐ Отзывы", "callback_data": "adm:reviews"},
         ],
-        [{"text": "🏷 Промокоды", "callback_data": "adm:promos"}],
+        [
+            {"text": "🏷 Промокоды", "callback_data": "adm:promos"},
+            {"text": "🌍 Серверы", "callback_data": "adm:locs"},
+        ],
+        [{"text": "🛠 Настройки", "callback_data": "adm:settings"}],
         [{"text": "🔄 Синхронизировать ключи с сервера", "callback_data": "adm:keysync"}],
         [{"text": "← Меню", "callback_data": "menu"}],
     ]}
