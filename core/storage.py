@@ -53,6 +53,18 @@ CREATE TABLE IF NOT EXISTS reviews (
     published  INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS promos (
+    code       TEXT PRIMARY KEY,
+    percent    INTEGER NOT NULL,
+    max_uses   INTEGER NOT NULL DEFAULT 0,
+    used       INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS promo_uses (
+    code    TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    PRIMARY KEY (code, user_id)
+);
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -85,6 +97,15 @@ class Storage:
             if "review_asked" not in cols:
                 self.db.execute(
                     "ALTER TABLE users ADD COLUMN review_asked INTEGER NOT NULL DEFAULT 0")
+            if "trial_used" not in cols:
+                self.db.execute(
+                    "ALTER TABLE users ADD COLUMN trial_used INTEGER NOT NULL DEFAULT 0")
+            if "promo" not in cols:
+                self.db.execute("ALTER TABLE users ADD COLUMN promo TEXT NOT NULL DEFAULT ''")
+            cols = {r["name"] for r in self.db.execute("PRAGMA table_info(subs)")}
+            if "winback_for" not in cols:
+                self.db.execute(
+                    "ALTER TABLE subs ADD COLUMN winback_for INTEGER NOT NULL DEFAULT 0")
             cols = {r["name"] for r in self.db.execute("PRAGMA table_info(keys_pool)")}
             if "comment" not in cols:
                 self.db.execute(
@@ -98,6 +119,8 @@ class Storage:
             if "location" not in cols:
                 self.db.execute(
                     "ALTER TABLE orders ADD COLUMN location TEXT NOT NULL DEFAULT ''")
+            if "promo" not in cols:
+                self.db.execute("ALTER TABLE orders ADD COLUMN promo TEXT NOT NULL DEFAULT ''")
             self.db.commit()
 
     # ---------- пользователи ----------
@@ -210,14 +233,14 @@ class Storage:
 
     # ---------- заказы ----------
     def create_order(self, user_id: int, plan: dict, price: int | None = None,
-                     balance_used: int = 0, location: str = "") -> int:
+                     balance_used: int = 0, location: str = "", promo: str = "") -> int:
         with self.lock:
             cur = self.db.execute(
                 "INSERT INTO orders(user_id, plan_code, title, price, days, balance_used,"
-                " location, created_at) VALUES(?,?,?,?,?,?,?,?)",
+                " location, promo, created_at) VALUES(?,?,?,?,?,?,?,?,?)",
                 (user_id, plan["code"], plan["title"],
                  plan["price"] if price is None else price, plan["days"],
-                 balance_used, location, int(time.time())))
+                 balance_used, location, promo, int(time.time())))
             self.db.commit()
             return int(cur.lastrowid)
 
@@ -310,6 +333,81 @@ class Storage:
         with self.lock:
             row = self.db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         return dict(row) if row else {}
+
+    def has_paid(self, user_id: int) -> bool:
+        with self.lock:
+            row = self.db.execute("SELECT 1 FROM orders WHERE user_id = ? AND status = 'paid'"
+                                  " LIMIT 1", (user_id,)).fetchone()
+        return row is not None
+
+    def set_trial_used(self, user_id: int) -> None:
+        with self.lock:
+            self.db.execute("UPDATE users SET trial_used = 1 WHERE id = ?", (user_id,))
+            self.db.commit()
+
+    # ---------- промокоды ----------
+    def save_promo(self, code: str, percent: int, max_uses: int = 0) -> None:
+        with self.lock:
+            self.db.execute(
+                "INSERT INTO promos(code, percent, max_uses, created_at) VALUES(?,?,?,?)"
+                " ON CONFLICT(code) DO UPDATE SET percent = excluded.percent,"
+                " max_uses = excluded.max_uses",
+                (code, percent, max_uses, int(time.time())))
+            self.db.commit()
+
+    def delete_promo(self, code: str) -> bool:
+        with self.lock:
+            cur = self.db.execute("DELETE FROM promos WHERE code = ?", (code,))
+            self.db.commit()
+        return cur.rowcount > 0
+
+    def promo(self, code: str) -> dict:
+        with self.lock:
+            row = self.db.execute("SELECT * FROM promos WHERE code = ?", (code,)).fetchone()
+        return dict(row) if row else {}
+
+    def promos(self) -> list[dict]:
+        with self.lock:
+            rows = self.db.execute("SELECT * FROM promos ORDER BY created_at DESC").fetchall()
+        return [dict(r) for r in rows]
+
+    def promo_used_by(self, code: str, user_id: int) -> bool:
+        with self.lock:
+            row = self.db.execute("SELECT 1 FROM promo_uses WHERE code = ? AND user_id = ?",
+                                  (code, user_id)).fetchone()
+        return row is not None
+
+    def set_user_promo(self, user_id: int, code: str) -> None:
+        with self.lock:
+            self.db.execute("UPDATE users SET promo = ? WHERE id = ?", (code, user_id))
+            self.db.commit()
+
+    def use_promo(self, code: str, user_id: int) -> None:
+        with self.lock:
+            cur = self.db.execute("INSERT OR IGNORE INTO promo_uses(code, user_id) VALUES(?,?)",
+                                  (code, user_id))
+            if cur.rowcount:
+                self.db.execute("UPDATE promos SET used = used + 1 WHERE code = ?", (code,))
+            self.db.execute("UPDATE users SET promo = '' WHERE id = ? AND promo = ?",
+                            (user_id, code))
+            self.db.commit()
+
+    # ---------- возврат ушедших ----------
+    def winback_candidates(self, after_days: int, window_days: int = 30) -> list[dict]:
+        now = int(time.time())
+        with self.lock:
+            rows = self.db.execute(
+                "SELECT * FROM subs WHERE expires_at <= ? AND expires_at > ?"
+                " AND winback_for != expires_at",
+                (now - after_days * 86400, now - (after_days + window_days) * 86400)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def set_winback(self, user_id: int, expires_at: int) -> None:
+        with self.lock:
+            self.db.execute("UPDATE subs SET winback_for = ? WHERE user_id = ?",
+                            (expires_at, user_id))
+            self.db.commit()
 
     # ---------- отзывы ----------
     def review_candidates(self, after_days: int) -> list[int]:

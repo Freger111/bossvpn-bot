@@ -36,6 +36,8 @@ BOT_USER = os.environ.get("BOT_USERNAME", "bossVPHbot")
 PAY_SBP = os.environ.get("PAY_SBP", "+7 900 000-00-00")
 PAY_NAME = os.environ.get("PAY_NAME", "Т-Банк")
 TRIAL_DAYS = int(os.environ.get("TRIAL_DAYS", "0"))   # 0 — без пробного периода
+WINBACK_PERCENT = int(os.environ.get("WINBACK_PERCENT", "20"))   # 0 — не возвращать ушедших
+WINBACK_AFTER_DAYS = int(os.environ.get("WINBACK_AFTER_DAYS", "1"))
 REF_PERCENT = int(os.environ.get("REF_PERCENT", "10"))
 
 PANEL_URL = os.environ.get("PANEL_URL", "")
