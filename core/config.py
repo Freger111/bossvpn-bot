@@ -42,6 +42,10 @@ PANEL_URL = os.environ.get("PANEL_URL", "")
 PANEL_USER = os.environ.get("PANEL_USER", "admin")
 PANEL_PASS = os.environ.get("PANEL_PASS", "")
 
+YOOKASSA_SHOP_ID = os.environ.get("YOOKASSA_SHOP_ID", "")
+YOOKASSA_SECRET = os.environ.get("YOOKASSA_SECRET", "")
+REMIND_DAYS = int(os.environ.get("REMIND_DAYS", "3"))
+
 BLACK = (8, 10, 16)
 CYAN = (58, 215, 255)
 WHITE = (245, 247, 252)
@@ -56,12 +60,12 @@ def plan_image(code: str):
 
 PLANS = [
     {"code": "m1", "title": "1 месяц", "days": 30, "price": 199, "gb": 30,
-     "note": "30 ГБ · 1 устройство"},
+     "devices": 1, "note": "30 ГБ · 1 устройство"},
     {"code": "m3", "title": "3 месяца", "days": 90, "price": 499, "gb": 100,
-     "note": "100 ГБ · до 3 устройств · выгоднее на 17%"},
+     "devices": 3, "note": "100 ГБ · до 3 устройств · выгоднее на 17%"},
     {"code": "y1", "title": "12 месяцев", "days": 365, "price": 1490, "gb": 500,
-     "note": "500 ГБ · до 5 устройств · выгоднее на 38%"},
+     "devices": 5, "note": "500 ГБ · до 5 устройств · выгоднее на 38%"},
     {"code": "p1", "title": "1 месяц Premium", "days": 30, "price": 249, "gb": 50,
-     "note": "50 ГБ · виден пинг · до 3 устройств"},
+     "devices": 3, "note": "50 ГБ · виден пинг · до 3 устройств"},
 ]
 TRIAL_GB = 20
