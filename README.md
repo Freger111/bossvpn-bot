@@ -65,13 +65,21 @@ bossvpn-bot/
 ├─ bot.py          логика бота и selftest
 ├─ admin.py        заказы, ключи, статистика
 ├─ keys.py         трафик и управление ключами
-├─ brand.py        генератор аватара и баннера
+├─ brand.py        генератор аватара, баннера, промо и карточек тарифов
 ├─ core/
 │  ├─ config.py    настройки и тарифы
 │  ├─ storage.py   SQLite: пользователи, заказы, пул ключей
 │  ├─ server.py    клиент панели 3x-ui
 │  └─ keyboards.py кнопки и тексты
 └─ vpn_brand/      аватар, баннер, промо
+   ├─ src/         фоны-заготовки для brand.py
+   └─ fonts/       шрифты Unbounded и Manrope (OFL)
+```
+
+## Картинки
+
+```bash
+python brand.py   # перерисует vpn_brand/*.png по ценам из core/config.py
 ```
 
 ## Безопасность
