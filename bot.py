@@ -240,7 +240,13 @@ class VpnBot:
                          kb.locations(plan_code, available))
                 return
             location = available[0] if available else ""
-        user = self.db.ensure_user(user_id)
+        self.db.ensure_user(user_id)
+        for old in self.db.promo_orders(self.db.user(user_id).get("promo") or "", user_id, True):
+            if old["status"] == "new":
+                self.db.set_status(old["id"], "canceled")
+                if old["balance_used"]:
+                    self.db.add_balance(user_id, old["balance_used"])
+        user = self.db.user(user_id)
         promo, percent = self.user_promo(user_id)
         full = kb.discounted(plan["price"], percent)
         balance = user.get("balance") or 0
@@ -538,6 +544,9 @@ class VpnBot:
             and not self.db.has_paid(user_id)
 
     def start_trial(self, chat_id: int, user_id: int, frm: dict) -> None:
+        if chat_id != user_id:
+            self.say(chat_id, "🎁 Пробный период выдаётся только в личном чате с ботом.")
+            return
         if not self.trial_available(user_id):
             self.say(chat_id, "🎁 Пробный период уже использован. Выберите тариф — "
                               "от 49 ₽ в месяц.", kb.back("plans", "🛡 Тарифы"))
@@ -556,12 +565,21 @@ class VpnBot:
         if key is None:
             self.db.set_status(order_id, "canceled")
             return
+        expires = int(time.time()) + config.TRIAL_DAYS * 86400
+        happ, email = "", ""
+        if config.location(location)["url"]:
+            happ, email = self.sync_server_sub(
+                key, expires, rename_to=frm.get("username") or f"client{user_id}",
+                comment="Пробный период", total_gb=config.TRIAL_GB, limit_ip=1)
+            if not email:
+                self.db.release_key(key)
+                self.db.set_status(order_id, "canceled")
+                self.say(chat_id, "⏳ Сервер сейчас недоступен, попробуйте через пару минут.",
+                         kb.back("menu", "← Меню"))
+                return
         self.db.set_status(order_id, "trial")
         self.db.set_trial_used(user_id)
         expires = self.db.grant(user_id, config.TRIAL_DAYS, key)
-        happ, _ = self.sync_server_sub(
-            key, expires, rename_to=frm.get("username") or f"client{user_id}",
-            comment="Пробный период", total_gb=config.TRIAL_GB, limit_ip=1)
         self.say(chat_id,
                  self.key_text(f"🎁 <b>Пробный период на {kb.days_word(config.TRIAL_DAYS)}"
                                f" активирован</b>", "Пробный", expires,
@@ -577,10 +595,15 @@ class VpnBot:
         promo = self.db.promo(code)
         if not promo:
             return "Такого промокода нет. Проверьте написание."
-        if promo["max_uses"] and promo["used"] >= promo["max_uses"]:
+        if code.startswith("BACK") and not self.db.sub(user_id):
+            return "Такого промокода нет. Проверьте написание."
+        reserved = len(self.db.promo_orders(code, user_id, mine=False))
+        if promo["max_uses"] and promo["used"] + reserved >= promo["max_uses"]:
             return "Этот промокод закончился."
         if self.db.promo_used_by(code, user_id):
             return "Вы уже использовали этот промокод."
+        if any(o["status"] != "new" for o in self.db.promo_orders(code, user_id, mine=True)):
+            return "Промокод уже применён к заказу, который ждёт подтверждения."
         return ""
 
     def user_promo(self, user_id: int) -> tuple[str, int]:
@@ -637,7 +660,7 @@ class VpnBot:
             text = f"{head}\n\n"
             if not self.promo_error(code, user_id) and not self.user_promo(user_id)[1]:
                 self.db.set_user_promo(user_id, code)
-                text += (f"Дарим скидку <b>{config.WINBACK_PERCENT}%</b> на любой тариф — "
+                text += (f"Дарим скидку <b>{self.db.promo(code)['percent']}%</b> на любой тариф — "
                          f"она уже применена, просто выберите срок 👇")
             else:
                 text += "Возвращайтесь — ключ придёт сразу после оплаты 👇"
@@ -731,6 +754,9 @@ class VpnBot:
                          kb.back("adm:settings", "← Настройки"))
         elif action == "locs":
             self.show_locations(chat_id)
+        elif action == "locadd" and chat_id != user_id:
+            self.say(chat_id, "🔒 Добавлять сервер можно только в личном чате с ботом — "
+                              "в сообщении будет пароль от панели.")
         elif action == "locadd":
             self.awaiting_setting[user_id] = "location"
             self.say(chat_id, "🌍 <b>Новый сервер</b>\n\nПришлите одним сообщением 5 строк:\n"
@@ -742,6 +768,8 @@ class VpnBot:
             extra = [loc for loc in json.loads(self.db.setting("cfg:locations", "[]"))
                      if loc["code"] != action[7:]]
             self.db.set_setting("cfg:locations", json.dumps(extra, ensure_ascii=False))
+            if all(loc["code"] != action[7:] for loc in config.ENV_LOCATIONS):
+                self.db.drop_free_keys(action[7:])
             config.set_locations(extra)
             self.connect_panels()
             self.show_locations(chat_id)
@@ -886,6 +914,9 @@ class VpnBot:
             return
         loc = {"code": code, "name": parts[1], "url": parts[2],
                "user": parts[3], "pass": parts[4]}
+        old = config.location(code)
+        if old["code"] == code and old["url"].rstrip("/") != loc["url"].rstrip("/"):
+            self.db.drop_free_keys(code)
         extra = [x for x in json.loads(self.db.setting("cfg:locations", "[]"))
                  if x["code"] != code] + [loc]
         self.db.set_setting("cfg:locations", json.dumps(extra, ensure_ascii=False))
@@ -895,6 +926,9 @@ class VpnBot:
             note = "✅ Панель подключена. Создайте в ней клиентов и нажмите «🔄 Синхронизировать ключи»."
         else:
             note = "⚠️ Сервер сохранён, но панель не ответила — проверьте адрес, логин и пароль."
+        if loc["url"].startswith("http://"):
+            note += ("\n\n⚠️ Адрес без https — пароль от панели идёт открытым текстом. "
+                     "Лучше включить SSL в панели.")
         self.say(chat_id, f"{loc['name']} добавлен.\n\n{note}")
         self.show_locations(chat_id)
 
@@ -1031,6 +1065,8 @@ class VpnBot:
         elif data == "trial":
             self.start_trial(chat_id, user_id, frm)
         elif data == "promo":
+            self.awaiting_review.pop(user_id, None)
+            self.awaiting_setting.pop(user_id, None)
             self.awaiting_promo.add(user_id)
             self.say(chat_id, "🏷 Отправьте промокод одним сообщением.",
                      kb.back("plans", "← Тарифы"))
@@ -1134,7 +1170,7 @@ class VpnBot:
         if self._health_result is not None:
             errors, fresh = self._health_result
             self._health_result = None
-            self.panels.update(fresh)
+            self.panels.update(self.current_panels(fresh))
             self.check_health(errors)
         if now - self._last_health >= 600 and not (
                 self._health_thread and self._health_thread.is_alive()):
@@ -1180,6 +1216,12 @@ class VpnBot:
                 errors[loc["code"]] = str(exc)[:200] or exc.__class__.__name__
         return errors, fresh
 
+    @staticmethod
+    def current_panels(fresh: dict) -> dict:
+        """Только панели, которые всё ещё в настройках и с тем же адресом."""
+        urls = {loc["code"]: loc["url"].rstrip("/") for loc in config.LOCATIONS}
+        return {code: p for code, p in fresh.items() if urls.get(code) == p.base}
+
     def _probe_worker(self) -> None:
         try:
             self._health_result = self.probe_panels()
@@ -1189,7 +1231,7 @@ class VpnBot:
     def check_health(self, errors: dict | None = None) -> None:
         if errors is None:
             errors, fresh = self.probe_panels()
-            self.panels.update(fresh)
+            self.panels.update(self.current_panels(fresh))
         active: dict[str, str] = {}
         for loc in config.LOCATIONS:
             if loc["url"]:
@@ -1448,6 +1490,19 @@ def selftest() -> int:
                      "message": {"chat": {"id": 42}, "message_id": 1}})
     bot.on_message({"chat": {"id": 42}, "from": {"id": 42}, "text": "boss20"})
     check("закончившийся код не принят", "закончился" in t.calls[-1][1]["text"])
+    bot.on_message({"chat": {"id": 1}, "from": {"id": 1}, "text": "/newpromo once 10 1"})
+    for uid in (81, 82):
+        db.ensure_user(uid)
+        db.set_user_promo(uid, "ONCE")
+    bot.start_purchase(81, 81, "m3")
+    check("последний код зарезервирован заказом", bot.user_promo(82)[1] == 0)
+    bot.start_purchase(81, 81, "m3")
+    check("повторный заказ отменяет прошлый", [o["status"] for o in db.recent_orders(2)]
+          == ["new", "canceled"])
+    bot.awaiting_review[42] = 1
+    bot.on_callback({"id": "q", "data": "promo", "from": {"id": 42},
+                     "message": {"chat": {"id": 42}, "message_id": 1}})
+    check("промокод не уходит в отзыв", 42 not in bot.awaiting_review)
 
     print("12. Возврат ушедших")
     db.db.execute("UPDATE subs SET expires_at = ? WHERE user_id = 42", (int(time.time()) - 3 * 86400,))
