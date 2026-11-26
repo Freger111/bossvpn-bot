@@ -81,6 +81,7 @@ LAVA_SECRET = os.environ.get("LAVA_SECRET", "")
 ENOT_API_KEY = os.environ.get("ENOT_API_KEY", "")
 ENOT_SHOP_ID = os.environ.get("ENOT_SHOP_ID", "")
 REMIND_DAYS = int(os.environ.get("REMIND_DAYS", "3"))
+LOW_KEYS = int(os.environ.get("LOW_KEYS", "3"))   # предупреждать админа, когда ключей ≤ N
 REVIEW_AFTER_DAYS = int(os.environ.get("REVIEW_AFTER_DAYS", "3"))   # 0 — не спрашивать отзыв
 REVIEWS_CHANNEL = os.environ.get("REVIEWS_CHANNEL", "")   # @канал для публикации отзывов
 

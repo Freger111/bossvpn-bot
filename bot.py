@@ -83,6 +83,8 @@ class VpnBot:
         self.panels: dict[str, server_mod.Panel] = {}
         self._last_card_check = 0.0
         self._last_remind = 0.0
+        self._last_health = 0.0
+        self._alerts: set[str] = set()
         for loc in config.LOCATIONS:
             if not loc["url"]:
                 continue
@@ -832,6 +834,10 @@ class VpnBot:
                             self.db.set_status(order["id"], "new")
                 except Exception as exc:
                     print("card check:", exc)
+        # здоровье панелей и остаток ключей
+        if now - self._last_health >= 600:
+            self._last_health = now
+            self.check_health()
         # напоминания об окончании подписки и просьбы об отзыве
         if now - self._last_remind >= 3600:
             self._last_remind = now
@@ -852,6 +858,51 @@ class VpnBot:
                 self.db.set_reminded(sub["user_id"], today)
             except Exception as exc:
                 print("reminder:", exc)
+
+    # ---------- алерты админу ----------
+    def check_panel(self, loc: dict) -> str:
+        """Пустая строка, если панель отвечает; иначе текст ошибки. Перелогинивается при сбое."""
+        panel = self.panels.get(loc["code"])
+        if panel:
+            try:
+                panel.list_clients()
+                return ""
+            except Exception:
+                pass
+        try:
+            panel = server_mod.Panel(loc["url"], loc["user"], loc["pass"])
+            panel.list_clients()
+            self.panels[loc["code"]] = panel
+            return ""
+        except Exception as exc:
+            return str(exc)[:200] or exc.__class__.__name__
+
+    def check_health(self) -> None:
+        active: dict[str, str] = {}
+        for loc in config.LOCATIONS:
+            if loc["url"]:
+                error = self.check_panel(loc)
+                if error:
+                    active[f"panel:{loc['code']}"] = (
+                        f"🔴 Панель {loc['name']} не отвечает: {html.escape(error)}")
+            for plan in config.PLANS:
+                left = self.db.keys_left(plan["code"], loc["code"])
+                if left <= config.LOW_KEYS:
+                    active[f"keys:{loc['code']}:{plan['code']}"] = (
+                        f"🔑 {loc['name']} · {plan['title']}: осталось ключей — <b>{left}</b>")
+        new_keys = [k for k in active if k not in self._alerts]
+        new = [active[k] for k in new_keys]
+        fixed = [k for k in self._alerts if k not in active]
+        self._alerts = set(active)
+        lines = []
+        if new:
+            lines.append("⚠️ <b>Требует внимания</b>\n\n" + "\n".join(new))
+            if any(k.startswith("keys:") for k in new_keys):
+                lines.append("\nДобавьте клиентов в панели и нажмите «🔄 Синхронизировать ключи».")
+        if fixed:
+            lines.append(("\n" if lines else "") + f"✅ Решено проблем: {len(fixed)}")
+        if lines:
+            self.notify_admins("\n".join(lines), kb.back("adm", "⚙️ Админ-панель"))
 
     # ---------- отзывы ----------
     def send_review_requests(self) -> None:
@@ -1045,6 +1096,15 @@ def selftest() -> int:
     bot.start_purchase(42, 42, "m3")
     check("одна страна в наличии — без выбора", "СБП" in t.calls[-1][1]["text"])
     config.LOCATIONS.pop()
+
+    print("9. Алерты")
+    sent = t.count("sendMessage")
+    bot.check_health()
+    check("админ узнал, что ключи заканчиваются", t.count("sendMessage") > sent
+          and "осталось ключей" in t.calls[-1][1]["text"])
+    sent = t.count("sendMessage")
+    bot.check_health()
+    check("повторно не спамим", t.count("sendMessage") == sent)
 
     print("\nИтог:", "всё работает" if ok else "есть ошибки")
     return 0 if ok else 1
