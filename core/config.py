@@ -46,6 +46,8 @@ YOOKASSA_SHOP_ID = os.environ.get("YOOKASSA_SHOP_ID", "")
 YOOKASSA_SECRET = os.environ.get("YOOKASSA_SECRET", "")
 LAVA_SHOP_ID = os.environ.get("LAVA_SHOP_ID", "")
 LAVA_SECRET = os.environ.get("LAVA_SECRET", "")
+ENOT_API_KEY = os.environ.get("ENOT_API_KEY", "")
+ENOT_SHOP_ID = os.environ.get("ENOT_SHOP_ID", "")
 REMIND_DAYS = int(os.environ.get("REMIND_DAYS", "3"))
 
 BLACK = (8, 10, 16)
