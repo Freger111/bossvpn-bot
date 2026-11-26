@@ -6,6 +6,8 @@ import threading
 import time
 from pathlib import Path
 
+from . import config
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     id         INTEGER PRIMARY KEY,
@@ -87,6 +89,15 @@ class Storage:
             if "comment" not in cols:
                 self.db.execute(
                     "ALTER TABLE keys_pool ADD COLUMN comment TEXT NOT NULL DEFAULT ''")
+            if "location" not in cols:
+                self.db.execute(
+                    "ALTER TABLE keys_pool ADD COLUMN location TEXT NOT NULL DEFAULT ''")
+            self.db.execute("UPDATE keys_pool SET location = ? WHERE location = ''",
+                            (config.DEFAULT_LOCATION,))
+            cols = {r["name"] for r in self.db.execute("PRAGMA table_info(orders)")}
+            if "location" not in cols:
+                self.db.execute(
+                    "ALTER TABLE orders ADD COLUMN location TEXT NOT NULL DEFAULT ''")
             self.db.commit()
 
     # ---------- пользователи ----------
@@ -137,21 +148,32 @@ class Storage:
             self.db.commit()
 
     # ---------- ключи ----------
-    def add_keys(self, plan_code: str, payloads: list[str]) -> int:
+    def add_keys(self, plan_code: str, payloads: list[str], location: str = "") -> int:
         now = int(time.time())
+        location = location or config.DEFAULT_LOCATION
         with self.lock:
             self.db.executemany(
-                "INSERT INTO keys_pool(plan_code, payload, created_at) VALUES(?,?,?)",
-                [(plan_code, p, now) for p in payloads])
+                "INSERT INTO keys_pool(plan_code, payload, location, created_at)"
+                " VALUES(?,?,?,?)",
+                [(plan_code, p, location, now) for p in payloads])
             self.db.commit()
         return len(payloads)
 
-    def keys_left(self, plan_code: str) -> int:
+    def keys_left(self, plan_code: str, location: str = "") -> int:
+        sql = "SELECT COUNT(*) c FROM keys_pool WHERE plan_code = ? AND used = 0"
+        args: list = [plan_code]
+        if location:
+            sql += " AND location = ?"
+            args.append(location)
         with self.lock:
-            row = self.db.execute(
-                "SELECT COUNT(*) c FROM keys_pool WHERE plan_code = ? AND used = 0",
-                (plan_code,)).fetchone()
+            row = self.db.execute(sql, args).fetchone()
         return int(row["c"]) if row else 0
+
+    def key_location(self, payload: str) -> str:
+        with self.lock:
+            row = self.db.execute("SELECT location FROM keys_pool WHERE payload = ? LIMIT 1",
+                                  (payload,)).fetchone()
+        return row["location"] if row and row["location"] else config.DEFAULT_LOCATION
 
     def pool(self, plan_code: str | None = None) -> list[dict]:
         sql = "SELECT * FROM keys_pool"
@@ -171,11 +193,14 @@ class Storage:
                 (comment, f"vless://{uuid}@%"))
             self.db.commit()
 
-    def take_key(self, plan_code: str, order_id: int) -> str | None:
+    def take_key(self, plan_code: str, order_id: int, location: str = "") -> str | None:
+        sql = "SELECT id, payload FROM keys_pool WHERE plan_code = ? AND used = 0"
+        args: list = [plan_code]
+        if location:
+            sql += " AND location = ?"
+            args.append(location)
         with self.lock:
-            row = self.db.execute(
-                "SELECT id, payload FROM keys_pool WHERE plan_code = ? AND used = 0"
-                " ORDER BY id LIMIT 1", (plan_code,)).fetchone()
+            row = self.db.execute(sql + " ORDER BY id LIMIT 1", args).fetchone()
             if row is None:
                 return None
             self.db.execute("UPDATE keys_pool SET used = 1, order_id = ? WHERE id = ?",
@@ -185,14 +210,14 @@ class Storage:
 
     # ---------- заказы ----------
     def create_order(self, user_id: int, plan: dict, price: int | None = None,
-                     balance_used: int = 0) -> int:
+                     balance_used: int = 0, location: str = "") -> int:
         with self.lock:
             cur = self.db.execute(
                 "INSERT INTO orders(user_id, plan_code, title, price, days, balance_used,"
-                " created_at) VALUES(?,?,?,?,?,?,?)",
+                " location, created_at) VALUES(?,?,?,?,?,?,?,?)",
                 (user_id, plan["code"], plan["title"],
                  plan["price"] if price is None else price, plan["days"],
-                 balance_used, int(time.time())))
+                 balance_used, location, int(time.time())))
             self.db.commit()
             return int(cur.lastrowid)
 

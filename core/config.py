@@ -42,6 +42,38 @@ PANEL_URL = os.environ.get("PANEL_URL", "")
 PANEL_USER = os.environ.get("PANEL_USER", "admin")
 PANEL_PASS = os.environ.get("PANEL_PASS", "")
 
+
+def load_locations() -> list[dict]:
+    """Локации (страны) серверов. У каждой — своя панель 3x-ui и свой пул ключей.
+
+    LOCATIONS=de,fi
+    LOC_FI_NAME=🇫🇮 Финляндия
+    LOC_FI_PANEL_URL=... / LOC_FI_PANEL_USER=... / LOC_FI_PANEL_PASS=...
+    Первая локация по умолчанию берёт PANEL_URL / PANEL_USER / PANEL_PASS.
+    """
+    names = {"de": "🇩🇪 Германия", "fi": "🇫🇮 Финляндия", "nl": "🇳🇱 Нидерланды"}
+    codes = [c.strip().lower() for c in os.environ.get("LOCATIONS", "de").split(",")
+             if c.strip()] or ["de"]
+    result = []
+    for i, code in enumerate(codes):
+        env = lambda key, default="": os.environ.get(f"LOC_{code.upper()}_{key}", default)  # noqa: E731
+        result.append({
+            "code": code,
+            "name": env("NAME", names.get(code, code.upper())),
+            "url": env("PANEL_URL", PANEL_URL if i == 0 else ""),
+            "user": env("PANEL_USER", PANEL_USER if i == 0 else "admin"),
+            "pass": env("PANEL_PASS", PANEL_PASS if i == 0 else ""),
+        })
+    return result
+
+
+LOCATIONS = load_locations()
+DEFAULT_LOCATION = LOCATIONS[0]["code"]
+
+
+def location(code: str) -> dict:
+    return next((loc for loc in LOCATIONS if loc["code"] == code), LOCATIONS[0])
+
 YOOKASSA_SHOP_ID = os.environ.get("YOOKASSA_SHOP_ID", "")
 YOOKASSA_SECRET = os.environ.get("YOOKASSA_SECRET", "")
 LAVA_SHOP_ID = os.environ.get("LAVA_SHOP_ID", "")

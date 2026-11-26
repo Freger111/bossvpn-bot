@@ -53,6 +53,13 @@ def plan_card(plan_code: str) -> dict:
     ]}
 
 
+def locations(plan_code: str, codes: list[str]) -> dict:
+    rows = [[{"text": config.location(c)["name"], "callback_data": f"buy:{plan_code}:{c}"}]
+            for c in codes]
+    rows.append([{"text": "← Тариф", "callback_data": f"plan:{plan_code}"}])
+    return {"inline_keyboard": rows}
+
+
 def pay_manual(order_id: int) -> dict:
     return {"inline_keyboard": [
         [{"text": "✅ Я оплатил", "callback_data": f"paid:{order_id}"}],
