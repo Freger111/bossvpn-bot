@@ -8,16 +8,20 @@ def money(value: int) -> str:
     return f"{value:,}".replace(",", " ") + " ₽"
 
 
+def per_month(plan: dict) -> int:
+    return round(plan["price"] / max(1, plan["days"] / 30))
+
+
 def main_menu(admin: bool = False) -> dict:
     rows = [
-        [{"text": "🛡 Купить VPN", "callback_data": "plans"}],
+        [{"text": "🛡 Подключить VPN", "callback_data": "plans"}],
         [
             {"text": "🔑 Моя подписка", "callback_data": "my"},
-            {"text": "📱 Инструкции", "callback_data": "help"},
+            {"text": "📱 Как подключить", "callback_data": "help"},
         ],
         [
+            {"text": "🎁 Бонусы за друзей", "callback_data": "invite"},
             {"text": "💬 Поддержка", "callback_data": "support"},
-            {"text": "🎁 Пригласить друга", "callback_data": "invite"},
         ],
     ]
     if admin:
@@ -25,28 +29,43 @@ def main_menu(admin: bool = False) -> dict:
     return {"inline_keyboard": rows}
 
 
+PLAN_ICONS = {"m1": "🛡", "m3": "🚀", "m6": "💎", "y1": "👑"}
+
+
 def plans() -> dict:
-    icons = {"m1": "🛡", "m3": "🚀", "m6": "💎", "y1": "👑"}
     rows = []
     for plan in config.PLANS:
-        icon = icons.get(plan["code"], "🛡")
-        rows.append([{"text": f"{icon} {plan['title']} — {money(plan['price'])}"
-                              f" · {plan.get('gb', 0)} ГБ",
-                      "callback_data": f"plan:{plan['code']}"}])
-    rows.append([{"text": "◀️ Меню", "callback_data": "menu"}])
+        icon = PLAN_ICONS.get(plan["code"], "🛡")
+        label = f"{icon} {plan['title']} — {money(plan['price'])}"
+        if plan["days"] > 30:
+            label += f" · {per_month(plan)} ₽/мес"
+        rows.append([{"text": label, "callback_data": f"plan:{plan['code']}"}])
+    rows.append([{"text": "🏠 Главное меню", "callback_data": "menu"}])
     return {"inline_keyboard": rows}
 
 
 def plan_card(plan_code: str) -> dict:
-    rows = [[{"text": "💳 Оплатить", "callback_data": f"buy:{plan_code}"},
-             {"text": "← Тарифы", "callback_data": "plans"}]]
-    return {"inline_keyboard": rows}
+    plan = next((p for p in config.PLANS if p["code"] == plan_code), {})
+    buy = f"💳 Купить за {money(plan['price'])}" if plan else "💳 Купить"
+    return {"inline_keyboard": [
+        [{"text": buy, "callback_data": f"buy:{plan_code}"}],
+        [{"text": "← Все тарифы", "callback_data": "plans"}],
+    ]}
 
 
 def pay_manual(order_id: int) -> dict:
     return {"inline_keyboard": [
         [{"text": "✅ Я оплатил", "callback_data": f"paid:{order_id}"}],
-        [{"text": "← Отменить", "callback_data": f"cancel:{order_id}"}],
+        [{"text": "✖️ Отменить заказ", "callback_data": f"cancel:{order_id}"}],
+    ]}
+
+
+def sub_menu(active: bool) -> dict:
+    first = "🔄 Продлить подписку" if active else "🛡 Выбрать тариф"
+    return {"inline_keyboard": [
+        [{"text": first, "callback_data": "plans"}],
+        [{"text": "📱 Как подключить", "callback_data": "help"},
+         {"text": "🏠 Меню", "callback_data": "menu"}],
     ]}
 
 
@@ -77,8 +96,29 @@ def back(to: str = "menu", label: str = "← Назад") -> dict:
 
 HELP = (
     "📱 <b>Как подключить {brand}</b>\n\n"
-    "<b>iOS</b>: App Store → «V2RayTun» или «Shadowrocket» → импорт ключа.\n"
-    "<b>Android</b>: Google Play → «v2rayNG» → «+» → импорт из буфера.\n"
-    "<b>Windows</b>: скачайте «v2rayN», вставьте ключ → подключить.\n\n"
-    "Ключ придёт автоматически после оплаты. Просто скопируйте его в приложение."
+    "<b>1.</b> Установите приложение:\n"
+    "· <b>iPhone / iPad</b> — Happ или V2RayTun (App Store)\n"
+    "· <b>Android</b> — Happ или v2rayNG (Google Play)\n"
+    "· <b>Windows</b> — Hiddify или v2rayN\n\n"
+    "<b>2.</b> Откройте «🔑 Моя подписка» и нажмите на ключ — он скопируется.\n\n"
+    "<b>3.</b> В приложении нажмите «+» → «Импорт из буфера» и включите VPN.\n\n"
+    "Готово! Если что-то не получается — напишите в поддержку, поможем 🙌"
 )
+
+SHORT_DESCRIPTION = "Быстрый VPN без логов. Подключение за 2 минуты, ключ сразу в чат. iOS · Android · Windows"
+
+DESCRIPTION = (
+    "🛡 {brand} — быстрый и стабильный VPN без логов.\n\n"
+    "⚡ Подключение за 2 минуты\n"
+    "📱 iOS, Android и Windows\n"
+    "🔒 Протокол VLESS · Reality\n"
+    "💳 Оплата по СБП или картой — ключ приходит прямо в чат\n"
+    "🎁 Бонусы за приглашённых друзей\n\n"
+    "Нажмите «Запустить», чтобы выбрать тариф 👇"
+)
+
+COMMANDS = [
+    {"command": "start", "description": "Главное меню и тарифы"},
+    {"command": "my", "description": "Моя подписка и ключ"},
+    {"command": "help", "description": "Как подключить VPN"},
+]

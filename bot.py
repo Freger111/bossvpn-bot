@@ -88,6 +88,17 @@ class VpnBot:
             except Exception as exc:
                 print("панель недоступна:", exc)
 
+    def setup_profile(self) -> None:
+        """Описание, короткое описание и меню команд бота в Telegram."""
+        for method, params in (
+                ("setMyCommands", {"commands": kb.COMMANDS}),
+                ("setMyDescription", {"description": kb.DESCRIPTION.format(brand=config.BRAND)}),
+                ("setMyShortDescription", {"short_description": kb.SHORT_DESCRIPTION})):
+            try:
+                self.tg.call(method, **params)
+            except Exception as exc:
+                print(f"{method}:", exc)
+
     def is_admin(self, user_id: int) -> bool:
         return user_id in self.admins
 
@@ -126,14 +137,19 @@ class VpnBot:
     def welcome(self, chat_id: int, user_id: int, username: str = "",
                 ref_id: int | None = None, source: str = "") -> None:
         self.db.ensure_user(user_id, username, ref_id, source)
-        caption = (f"🛡 <b>{config.BRAND}</b> — VPN без логов и тормозов.\n\n"
-                   f"Подключение за 2 минуты. iOS, Android, Windows.\n"
-                   f"Оплата по СБП — ключ приходит сразу после подтверждения.\n\n"
-                   f"👇 Выберите тариф")
+        from_price = min(kb.per_month(p) for p in config.PLANS)
+        caption = (f"🛡 <b>{config.BRAND}</b> — быстрый VPN без логов\n\n"
+                   f"⚡ Подключение за 2 минуты\n"
+                   f"📱 iOS · Android · Windows\n"
+                   f"🔒 VLESS · Reality — стабильно и незаметно\n"
+                   f"💳 СБП или карта — ключ приходит прямо в чат\n\n"
+                   f"Тарифы от <b>{from_price} ₽/мес</b> 👇")
         self.send_banner(chat_id, caption, kb.main_menu(self.is_admin(user_id)))
 
     def show_plans(self, chat_id: int) -> None:
-        self.say(chat_id, "🛡 <b>Тарифы</b>\n\nВыберите тариф — откроется фото и описание 👇",
+        self.say(chat_id, "🛡 <b>Выберите тариф</b>\n\n"
+                          "Чем дольше срок — тем дешевле месяц.\n"
+                          "Во всех тарифах: без логов · VLESS · Reality · iOS / Android / Windows",
                  kb.plans())
 
     def show_plan(self, chat_id: int, plan_code: str) -> None:
@@ -141,13 +157,17 @@ class VpnBot:
         if plan is None:
             return
         left = self.db.keys_left(plan_code)
-        text = (f"🛡 <b>{plan['title']}</b>\n\n"
-                f"📅 срок: {plan['days']} дней\n"
-                f"📦 трафик: {plan.get('gb', 0)} ГБ\n"
-                f"⚡ протоколы: REALITY · WS · TLS\n"
-                f"📱 {plan['note']}\n"
-                f"💰 цена: <b>{kb.money(plan['price'])}</b>\n\n"
-                f"🔑 Ключей в наличии: {left}")
+        icon = kb.PLAN_ICONS.get(plan_code, "🛡")
+        text = (f"{icon} <b>{plan['title']}</b> · {kb.money(plan['price'])}\n\n"
+                f"📅 {plan['days']} дней доступа\n"
+                f"📦 {plan.get('gb', 0)} ГБ трафика\n"
+                f"📱 до {plan.get('devices', 1)} устройств\n"
+                f"⚡ VLESS · Reality\n\n"
+                f"💡 Выходит ≈ <b>{kb.per_month(plan)} ₽ в месяц</b>")
+        if left == 0:
+            text += "\n\n⏳ Ключи временно закончились — скоро пополним."
+        elif left <= 5:
+            text += f"\n\n🔥 Осталось ключей: {left}"
         self.say_photo(chat_id, config.plan_image(plan_code), text,
                        kb.plan_card(plan_code))
 
@@ -163,14 +183,14 @@ class VpnBot:
         order_id = self.db.create_order(user_id, plan, price=price, balance_used=balance_used)
         if balance_used:
             self.db.add_balance(user_id, -balance_used)
-        text = (f"🧾 <b>Заказ #{order_id}</b>\n\n"
-                f"Тариф: {plan['title']}\n"
-                f"Сумма: <b>{kb.money(price)}</b>")
+        text = (f"🧾 <b>Заказ #{order_id}</b> · {plan['title']}\n\n"
+                f"К оплате: <b>{kb.money(price)}</b>")
         if balance_used:
             text += f"\n🎁 Бонусами списано: {kb.money(balance_used)}"
-        text += (f"\n\nПереведите по СБП:\n"
-                 f"<code>{config.PAY_SBP}</code> ({config.PAY_NAME})\n\n"
-                 f"После перевода нажмите «Я оплатил» — ключ придёт автоматически.")
+        text += (f"\n\n<b>Оплата по СБП</b>\n"
+                 f"Номер: <code>{config.PAY_SBP}</code>\n"
+                 f"Банк: {config.PAY_NAME}\n\n"
+                 f"После перевода нажмите «✅ Я оплатил» — ключ придёт в этот чат.")
 
         markup = kb.pay_manual(order_id)
         if config.YOOKASSA_SECRET:
@@ -192,19 +212,21 @@ class VpnBot:
         if not order or order["user_id"] != user_id:
             return
         if order["status"] != "new":
-            self.say(chat_id, "Заказ уже обработан.")
+            self.say(chat_id, "✅ Этот заказ уже обработан.")
             return
         url = pay_mod.enot_create_invoice(config.ENOT_API_KEY, config.ENOT_SHOP_ID,
                                           order["price"], order_id)
         if not url:
-            self.say(chat_id, "Не удалось создать платёж. Попробуйте по СБП.",
+            self.say(chat_id, "😕 Платёжный сервис не ответил. Попробуйте ещё раз или оплатите по СБП.",
                      kb.pay_manual(order_id))
             return
         self.db.set_charge(order_id, "enot:" + str(order_id))
         self.db.set_status(order_id, "card_pending")
         self.say(chat_id,
-                 f"💳 <b>Оплата картой</b>\n\nСумма: {kb.money(order['price'])}\n\n"
-                 f"Нажмите кнопку и оплатите, затем «Проверить оплату».",
+                 f"💳 <b>Оплата картой</b>\n\nК оплате: <b>{kb.money(order['price'])}</b>\n\n"
+                 f"1. Нажмите «Перейти к оплате»\n"
+                 f"2. Оплатите и вернитесь в бот\n"
+                 f"3. Нажмите «Проверить оплату» — ключ придёт сразу",
                  {"inline_keyboard": [
                      [{"text": "💳 Перейти к оплате", "url": url}],
                      [{"text": "🔄 Проверить оплату",
@@ -216,19 +238,21 @@ class VpnBot:
         if not order or order["user_id"] != user_id:
             return
         if order["status"] != "new":
-            self.say(chat_id, "Заказ уже обработан.")
+            self.say(chat_id, "✅ Этот заказ уже обработан.")
             return
         url = pay_mod.lava_create_invoice(config.LAVA_SHOP_ID, config.LAVA_SECRET,
                                           order["price"], order_id)
         if not url:
-            self.say(chat_id, "Не удалось создать счёт. Попробуйте по СБП.",
+            self.say(chat_id, "😕 Платёжный сервис не ответил. Попробуйте ещё раз или оплатите по СБП.",
                      kb.pay_manual(order_id))
             return
         self.db.set_charge(order_id, "lava")
         self.db.set_status(order_id, "card_pending")
         self.say(chat_id,
-                 f"💳 <b>Оплата картой</b>\n\nСумма: {kb.money(order['price'])}\n\n"
-                 f"Нажмите кнопку и оплатите, затем «Проверить оплату».",
+                 f"💳 <b>Оплата картой</b>\n\nК оплате: <b>{kb.money(order['price'])}</b>\n\n"
+                 f"1. Нажмите «Перейти к оплате»\n"
+                 f"2. Оплатите и вернитесь в бот\n"
+                 f"3. Нажмите «Проверить оплату» — ключ придёт сразу",
                  {"inline_keyboard": [
                      [{"text": "💳 Перейти к оплате", "url": url}],
                      [{"text": "🔄 Проверить оплату",
@@ -240,7 +264,7 @@ class VpnBot:
         if not order or order["user_id"] != user_id:
             return
         if order["status"] != "new":
-            self.say(chat_id, "Заказ уже обработан.")
+            self.say(chat_id, "✅ Этот заказ уже обработан.")
             return
         result = pay_mod.create_payment(config.YOOKASSA_SHOP_ID, config.YOOKASSA_SECRET,
                                         order["price"], f"{config.BRAND} · {order['title']}",
@@ -248,14 +272,16 @@ class VpnBot:
         url = (result.get("confirmation") or {}).get("confirmation_url")
         pay_id = result.get("id")
         if not url or not pay_id:
-            self.say(chat_id, "Не удалось создать платёж. Попробуйте по СБП.",
+            self.say(chat_id, "😕 Платёжный сервис не ответил. Попробуйте ещё раз или оплатите по СБП.",
                      kb.pay_manual(order_id))
             return
         self.db.set_charge(order_id, pay_id)
         self.db.set_status(order_id, "card_pending")
         self.say(chat_id,
-                 f"💳 <b>Оплата картой</b>\n\nСумма: {kb.money(order['price'])}\n\n"
-                 f"Нажмите кнопку и оплатите, затем «Проверить оплату».",
+                 f"💳 <b>Оплата картой</b>\n\nК оплате: <b>{kb.money(order['price'])}</b>\n\n"
+                 f"1. Нажмите «Перейти к оплате»\n"
+                 f"2. Оплатите и вернитесь в бот\n"
+                 f"3. Нажмите «Проверить оплату» — ключ придёт сразу",
                  {"inline_keyboard": [
                      [{"text": "💳 Перейти к оплате", "url": url}],
                      [{"text": "🔄 Проверить оплату",
@@ -265,7 +291,7 @@ class VpnBot:
     def check_card_payment(self, chat_id: int, order_id: int) -> None:
         order = self.db.order(order_id)
         if not order or not order.get("charge_id"):
-            self.say(chat_id, "Платёж не найден.")
+            self.say(chat_id, "Платёж не найден. Создайте заказ заново в разделе тарифов.")
             return
         charge = order["charge_id"]
         if charge.startswith("enot:"):
@@ -274,24 +300,24 @@ class VpnBot:
             if status == "paid":
                 self.db.set_status(order_id, "awaiting")
                 self.deliver(order_id)
-                self.say(chat_id, "✅ Оплата получена, ключ выдан покупателю.")
+                self.say(chat_id, "✅ Оплата получена! Ключ уже в чате.")
             elif status in ("expired", "fail", "rejected"):
                 self.db.set_status(order_id, "new")
-                self.say(chat_id, "❌ Платёж отменён.")
+                self.say(chat_id, "❌ Платёж отменён. Можно попробовать ещё раз или оплатить по СБП.")
             else:
-                self.say(chat_id, "⏳ Оплата ещё не поступила. Попробуйте позже.")
+                self.say(chat_id, "⏳ Платёж пока не поступил. Обычно это занимает до минуты — проверьте чуть позже.")
             return
         if charge == "lava":
             status = pay_mod.lava_status(config.LAVA_SHOP_ID, config.LAVA_SECRET, order_id)
             if status == "success":
                 self.db.set_status(order_id, "awaiting")
                 self.deliver(order_id)
-                self.say(chat_id, "✅ Оплата получена, ключ выдан покупателю.")
+                self.say(chat_id, "✅ Оплата получена! Ключ уже в чате.")
             elif status == "fail":
                 self.db.set_status(order_id, "new")
-                self.say(chat_id, "❌ Платёж отменён.")
+                self.say(chat_id, "❌ Платёж отменён. Можно попробовать ещё раз или оплатить по СБП.")
             else:
-                self.say(chat_id, "⏳ Оплата ещё не поступила. Попробуйте позже.")
+                self.say(chat_id, "⏳ Платёж пока не поступил. Обычно это занимает до минуты — проверьте чуть позже.")
             return
         payment = pay_mod.get_payment(config.YOOKASSA_SHOP_ID, config.YOOKASSA_SECRET,
                                       charge[3:] if charge.startswith("yk:") else charge)
@@ -299,29 +325,31 @@ class VpnBot:
         if status == "succeeded":
             self.db.set_status(order_id, "awaiting")
             self.deliver(order_id)
-            self.say(chat_id, "✅ Оплата получена, ключ выдан покупателю.")
+            self.say(chat_id, "✅ Оплата получена! Ключ уже в чате.")
         elif status == "canceled":
             self.db.set_status(order_id, "new")
-            self.say(chat_id, "❌ Платёж отменён.")
+            self.say(chat_id, "❌ Платёж отменён. Можно попробовать ещё раз или оплатить по СБП.")
         else:
-            self.say(chat_id, "⏳ Оплата ещё не поступила. Попробуйте позже.")
+            self.say(chat_id, "⏳ Платёж пока не поступил. Обычно это занимает до минуты — проверьте чуть позже.")
 
     def mark_paid(self, chat_id: int, user_id: int, order_id: int) -> None:
         order = self.db.order(order_id)
         if not order or order["user_id"] != user_id:
             return
         if order["status"] != "new":
-            self.say(chat_id, "Заказ уже обработан.")
+            self.say(chat_id, "✅ Этот заказ уже обработан.")
             return
         self.db.set_status(order_id, "awaiting")
-        self.say(chat_id, "✅ Заявка принята. Как только администратор подтвердит оплату — "
-                          "ключ придёт в этот чат.")
+        self.say(chat_id, "⏳ <b>Проверяем оплату</b>\n\n"
+                          "Обычно это занимает несколько минут. Как только платёж "
+                          "подтвердится, ключ придёт в этот чат.")
         for admin in self.admins:
             try:
                 self.say(admin,
                          f"🔔 <b>Новая оплата</b>\n\nЗаказ #{order_id}\n"
                          f"Тариф: {order['title']}\n"
-                         f"Сумма: {kb.money(order['price'])}",
+                         f"Сумма: {kb.money(order['price'])}\n"
+                         f"Покупатель: <code>{user_id}</code>",
                          kb.admin_confirm(order_id))
             except Exception:
                 pass
@@ -330,9 +358,10 @@ class VpnBot:
         order = self.db.order(order_id)
         if order and order["user_id"] == user_id and order["status"] == "new":
             self.db.set_status(order_id, "canceled")
-            self.say(chat_id, "Заказ отменён.")
+            self.say(chat_id, "Заказ отменён. Возвращайтесь, когда будете готовы 🙌",
+                     kb.back("plans", "🛡 Тарифы"))
         else:
-            self.say(chat_id, "Заказ уже нельзя отменить.")
+            self.say(chat_id, "Этот заказ уже нельзя отменить.")
 
     def sync_server_sub(self, payload: str, expires_at: int,
                         rename_to: str = "", comment: str = "",
@@ -381,7 +410,8 @@ class VpnBot:
         key = self.db.take_key(order["plan_code"], order_id)
         if key is None:
             self.say(order["user_id"],
-                     "⚠️ Ключи для этого тарифа закончились. Администратор свяжется с вами.")
+                     "⚠️ Ключи для этого тарифа временно закончились. Оплата сохранена — "
+                     f"пришлём ключ в ближайшее время. Вопросы: {config.SUPPORT}")
             return
         self.db.set_status(order_id, "paid")
         expires = self.db.grant(order["user_id"], order["days"], key)
@@ -400,35 +430,36 @@ class VpnBot:
             comment=f"Заказ #{order_id} · {order['title']}",
             total_gb=plan.get("gb", 0),
             limit_ip=plan.get("devices", 0))
-        lines = [f"🎉 <b>Подписка активирована!</b>\n\n"
-                 f"Тариф: {order['title']}\n"
-                 f"Действует до: <b>{time.strftime('%d.%m.%Y', time.localtime(expires))}</b>\n"
-                 f"Трафик: <b>{plan.get('gb', 0)} ГБ</b>\n"
-                 f"Устройств: <b>{plan.get('devices', 1)}</b>\n\n"
-                 f"Ваш ключ (скопируйте полностью):\n"
+        lines = [f"🎉 <b>Готово! VPN активирован</b>\n\n"
+                 f"📦 Тариф: {order['title']}\n"
+                 f"📅 Действует до: <b>{time.strftime('%d.%m.%Y', time.localtime(expires))}</b>\n"
+                 f"📊 Трафик: <b>{plan.get('gb', 0)} ГБ</b>\n"
+                 f"📱 Устройств: <b>{plan.get('devices', 1)}</b>\n\n"
+                 f"🔑 <b>Ваш ключ</b> — нажмите, чтобы скопировать:\n"
                  f"<code>{key}</code>"]
         if happ:
             lines.append(f"\n📲 <b>Happ</b> — подключение в один клик, "
                          f"там видна подписка и трафик:\n<code>{happ}</code>")
-        lines.append("\nКак подключить — в разделе «📱 Инструкции».")
-        self.say(order["user_id"], "\n".join(lines), kb.back("help", "📱 Инструкции"))
+        lines.append("\nВставьте ключ в приложение — пошаговая инструкция по кнопке ниже.")
+        self.say(order["user_id"], "\n".join(lines), kb.back("help", "📱 Как подключить"))
 
     # ---------- подписка ----------
     def show_sub(self, chat_id: int, user_id: int) -> None:
         sub = self.db.sub(user_id)
         if not sub:
-            self.say(chat_id, "У вас пока нет активной подписки.\n\nОформите тариф 👇",
-                     kb.back("plans", "🛡 Выбрать тариф"))
+            self.say(chat_id, "🔑 У вас пока нет подписки.\n\n"
+                              "Выберите тариф — подключение займёт 2 минуты 👇",
+                     kb.sub_menu(False))
             return
         now = int(time.time())
         if sub["expires_at"] <= now:
-            self.say(chat_id, "Ваша подписка истекла.\n\nПродлите её 👇",
-                     kb.back("plans", "🛡 Продлить"))
+            self.say(chat_id, "⌛ Подписка закончилась.\n\nПродлите, чтобы снова пользоваться VPN 👇",
+                     kb.sub_menu(False))
             return
         days_left = (sub["expires_at"] - now) // 86400 + 1
-        lines = [f"🔑 <b>Ваша подписка</b>\n\n"
-                 f"Дней осталось: <b>{days_left}</b>\n"
-                 f"До: {time.strftime('%d.%m.%Y', time.localtime(sub['expires_at']))}"]
+        lines = [f"🔑 <b>Моя подписка</b>\n\n"
+                 f"✅ Активна · осталось <b>{days_left} дн.</b>\n"
+                 f"📅 До: {time.strftime('%d.%m.%Y', time.localtime(sub['expires_at']))}"]
         balance = self.db.user(user_id).get("balance") or 0
         if balance:
             lines.append(f"🎁 Бонусный баланс: <b>{kb.money(balance)}</b> "
@@ -442,10 +473,10 @@ class VpnBot:
                     used_bytes = (traffic.get("up") or 0) + (traffic.get("down") or 0)
                     used_gb = used_bytes / 1024 ** 3
                     total_gb = client.get("totalGB") or 0
-                    lines.append(f"Израсходовано: <b>{used_gb:.2f} ГБ</b>")
+                    lines.append(f"📊 Израсходовано: <b>{used_gb:.2f} ГБ</b>")
                     if total_gb:
                         left_gb = max(0.0, total_gb - used_gb)
-                        lines.append(f"Осталось трафика: <b>{left_gb:.1f} ГБ из {total_gb} ГБ</b>")
+                        lines.append(f"📦 Осталось: <b>{left_gb:.1f} ГБ из {total_gb} ГБ</b>")
                         if used_gb >= total_gb:
                             lines.append("⚠️ <b>Лимит трафика исчерпан</b> — доступ приостановлен.")
                     if client.get("comment"):
@@ -455,8 +486,8 @@ class VpnBot:
         happ, _ = self.sync_server_sub(sub["payload"], sub["expires_at"])
         if happ:
             lines.append(f"\n📲 Happ (подписка и трафик видны в приложении):\n<code>{happ}</code>")
-        lines.append(f"\nКлюч:\n<code>{sub['payload']}</code>")
-        self.say(chat_id, "\n".join(lines), kb.back("menu", "← Меню"))
+        lines.append(f"\n🔑 Ключ (нажмите, чтобы скопировать):\n<code>{sub['payload']}</code>")
+        self.say(chat_id, "\n".join(lines), kb.sub_menu(True))
 
     # ---------- админ ----------
     def admin_action(self, chat_id: int, user_id: int, action: str) -> None:
@@ -640,7 +671,7 @@ class VpnBot:
         self.tg.call("answerCallbackQuery", callback_query_id=query["id"])
 
         if data == "menu":
-            self.say(chat_id, "Главное меню 👇", kb.main_menu(self.is_admin(user_id)))
+            self.say(chat_id, "🏠 <b>Главное меню</b>", kb.main_menu(self.is_admin(user_id)))
         elif data == "plans":
             self.show_plans(chat_id)
         elif data.startswith("plan:"):
@@ -656,14 +687,23 @@ class VpnBot:
         elif data == "help":
             self.say(chat_id, kb.HELP.format(brand=config.BRAND))
         elif data == "support":
-            self.say(chat_id, f"💬 Поддержка: {config.SUPPORT}")
+            self.say(chat_id, f"💬 <b>Поддержка</b>\n\nПишите: {config.SUPPORT}\n\n"
+                              f"Опишите проблему и приложите скриншот — так поможем быстрее.",
+                     kb.back("menu", "🏠 Меню"))
         elif data == "invite":
             link = f"https://t.me/{config.BOT_USER}?start=ref_{user_id}"
+            share = "https://t.me/share/url?" + urllib.parse.urlencode(
+                {"url": link, "text": f"Пользуюсь {config.BRAND} — быстрый VPN без логов"})
             self.say(chat_id,
-                     f"🎁 <b>Пригласи друга</b>\n\n"
-                     f"Пусть подключится по твоей ссылке — друг получает работающий VPN, "
-                     f"а ты помогаешь проекту.\n\nТвоя ссылка:\n<code>{link}</code>",
-                     kb.back("menu", "← Меню"))
+                     f"🎁 <b>Бонусы за друзей</b>\n\n"
+                     f"За каждую покупку друга по вашей ссылке вы получаете "
+                     f"<b>{config.REF_PERCENT}%</b> от суммы на бонусный баланс. "
+                     f"Бонусы списываются при следующей оплате.\n\n"
+                     f"🔗 Ваша ссылка:\n<code>{link}</code>",
+                     {"inline_keyboard": [
+                         [{"text": "📤 Поделиться ссылкой", "url": share}],
+                         [{"text": "🏠 Меню", "callback_data": "menu"}],
+                     ]})
         elif data.startswith("card:"):
             self.cmd_card_payment(chat_id, user_id, int(data[5:]))
         elif data.startswith("lava:"):
@@ -687,7 +727,9 @@ class VpnBot:
             order = self.db.order(order_id)
             if order:
                 self.db.set_status(order_id, "rejected")
-                self.say(order["user_id"], "❌ Оплата не подтверждена. Свяжитесь с поддержкой.")
+                self.say(order["user_id"],
+                         "❌ Не нашли ваш платёж. Если вы уже оплатили — напишите в "
+                         f"поддержку {config.SUPPORT}, разберёмся.")
             self.say(chat_id, "Отклонено.")
 
         # старое сообщение с кнопкой удаляем — остаётся только новое
@@ -747,9 +789,9 @@ class VpnBot:
             days_left = (sub["expires_at"] - int(time.time())) // 86400 + 1
             try:
                 self.say(sub["user_id"],
-                         f"⏳ Ваша подписка заканчивается через <b>{days_left} дн.</b>\n"
-                         f"Продлите, чтобы VPN не отключился.",
-                         kb.back("plans", "🛡 Продлить"))
+                         f"⏳ <b>Подписка заканчивается через {days_left} дн.</b>\n\n"
+                         f"Продлите заранее, чтобы VPN не отключился в самый нужный момент.",
+                         kb.back("plans", "🔄 Продлить"))
                 self.db.set_reminded(sub["user_id"], today)
             except Exception as exc:
                 print("reminder:", exc)
@@ -844,6 +886,7 @@ def main() -> int:
         print("Нет BOT_TOKEN. Заполните .env или запустите: python bot.py --selftest")
         return 1
     bot = VpnBot(Telegram(config.BOT_TOKEN), Storage(config.DB_PATH), config.ADMINS)
+    bot.setup_profile()
     print(f"{config.BRAND} запущен. Ctrl+C — остановить.")
     bot.poll()
     return 0
