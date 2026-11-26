@@ -31,13 +31,15 @@ CREATE TABLE IF NOT EXISTS orders (
     price        INTEGER NOT NULL,
     days         INTEGER NOT NULL,
     balance_used INTEGER NOT NULL DEFAULT 0,
+    charge_id    TEXT NOT NULL DEFAULT '',
     status       TEXT NOT NULL DEFAULT 'new',
     created_at   INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS subs (
-    user_id    INTEGER NOT NULL,
-    expires_at INTEGER NOT NULL,
-    payload    TEXT NOT NULL,
+    user_id      INTEGER NOT NULL,
+    expires_at   INTEGER NOT NULL,
+    payload      TEXT NOT NULL,
+    reminded_day TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (user_id)
 );
 CREATE TABLE IF NOT EXISTS settings (
@@ -58,6 +60,13 @@ class Storage:
             if "balance_used" not in cols:
                 self.db.execute(
                     "ALTER TABLE orders ADD COLUMN balance_used INTEGER NOT NULL DEFAULT 0")
+            if "charge_id" not in cols:
+                self.db.execute(
+                    "ALTER TABLE orders ADD COLUMN charge_id TEXT NOT NULL DEFAULT ''")
+            cols = {r["name"] for r in self.db.execute("PRAGMA table_info(subs)")}
+            if "reminded_day" not in cols:
+                self.db.execute(
+                    "ALTER TABLE subs ADD COLUMN reminded_day TEXT NOT NULL DEFAULT ''")
             cols = {r["name"] for r in self.db.execute("PRAGMA table_info(keys_pool)")}
             if "comment" not in cols:
                 self.db.execute(
@@ -155,6 +164,18 @@ class Storage:
             self.db.execute("UPDATE orders SET status = ? WHERE id = ?", (status, order_id))
             self.db.commit()
 
+    def set_charge(self, order_id: int, charge_id: str) -> None:
+        with self.lock:
+            self.db.execute("UPDATE orders SET charge_id = ? WHERE id = ?",
+                            (charge_id, order_id))
+            self.db.commit()
+
+    def card_pending_orders(self) -> list[dict]:
+        with self.lock:
+            rows = self.db.execute(
+                "SELECT * FROM orders WHERE status = 'card_pending'").fetchall()
+        return [dict(r) for r in rows]
+
     def pending_orders(self) -> list[dict]:
         with self.lock:
             rows = self.db.execute(
@@ -202,6 +223,21 @@ class Storage:
         with self.lock:
             row = self.db.execute("SELECT * FROM subs WHERE user_id = ?", (user_id,)).fetchone()
         return dict(row) if row else {}
+
+    def set_reminded(self, user_id: int, day: str) -> None:
+        with self.lock:
+            self.db.execute("UPDATE subs SET reminded_day = ? WHERE user_id = ?",
+                            (day, user_id))
+            self.db.commit()
+
+    def expiring_subs(self, days: int) -> list[dict]:
+        now = int(time.time())
+        deadline = now + days * 86400
+        with self.lock:
+            rows = self.db.execute(
+                "SELECT * FROM subs WHERE expires_at > ? AND expires_at <= ?",
+                (now, deadline)).fetchall()
+        return [dict(r) for r in rows]
 
     def user(self, user_id: int) -> dict:
         with self.lock:
