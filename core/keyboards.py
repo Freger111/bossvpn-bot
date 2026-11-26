@@ -17,9 +17,8 @@ def main_menu(admin: bool = False) -> dict:
         ],
         [
             {"text": "💬 Поддержка", "callback_data": "support"},
-            {"text": "⚡ Premium", "callback_data": "plan:p1"},
+            {"text": "🎁 Пригласить друга", "callback_data": "invite"},
         ],
-        [{"text": "🎁 Пригласить друга", "callback_data": "invite"}],
     ]
     if admin:
         rows.append([{"text": "⚙️ Админ-панель", "callback_data": "adm"}])
@@ -27,7 +26,7 @@ def main_menu(admin: bool = False) -> dict:
 
 
 def plans() -> dict:
-    icons = {"m1": "🛡", "m3": "🚀", "y1": "👑", "p1": "⚡"}
+    icons = {"m1": "🛡", "m3": "🚀", "m6": "💎", "y1": "👑"}
     rows = []
     for plan in config.PLANS:
         icon = icons.get(plan["code"], "🛡")
