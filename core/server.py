@@ -74,6 +74,12 @@ class Panel:
         result = self._request("GET", "/panel/api/inbounds/allLinks")
         return result.get("obj") or []
 
+    def happ_link(self, client_id: int) -> str:
+        """Ссылка для приложения Happ (там видна подписка и трафик)."""
+        result = self._request("POST", f"/panel/api/clients/happLink/{client_id}")
+        obj = result.get("obj") or {}
+        return obj.get("encryptedLink") or ""
+
     def find_by_uuid(self, uuid: str) -> dict | None:
         for client in self.list_clients():
             if client.get("uuid") == uuid:
