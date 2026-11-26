@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS users (
     username   TEXT NOT NULL DEFAULT '',
     ref_id     INTEGER,
     balance    INTEGER NOT NULL DEFAULT 0,
+    source     TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS keys_pool (
@@ -67,6 +68,10 @@ class Storage:
             if "reminded_day" not in cols:
                 self.db.execute(
                     "ALTER TABLE subs ADD COLUMN reminded_day TEXT NOT NULL DEFAULT ''")
+            cols = {r["name"] for r in self.db.execute("PRAGMA table_info(users)")}
+            if "source" not in cols:
+                self.db.execute(
+                    "ALTER TABLE users ADD COLUMN source TEXT NOT NULL DEFAULT ''")
             cols = {r["name"] for r in self.db.execute("PRAGMA table_info(keys_pool)")}
             if "comment" not in cols:
                 self.db.execute(
@@ -74,19 +79,45 @@ class Storage:
             self.db.commit()
 
     # ---------- пользователи ----------
-    def ensure_user(self, user_id: int, username: str = "", ref_id: int | None = None) -> dict:
+    def ensure_user(self, user_id: int, username: str = "", ref_id: int | None = None,
+                    source: str = "") -> dict:
         with self.lock:
             row = self.db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
             if row is None:
                 self.db.execute(
-                    "INSERT INTO users(id, username, ref_id, created_at) VALUES(?,?,?,?)",
-                    (user_id, username, ref_id, int(time.time())))
+                    "INSERT INTO users(id, username, ref_id, source, created_at)"
+                    " VALUES(?,?,?,?,?)",
+                    (user_id, username, ref_id, source, int(time.time())))
                 self.db.commit()
                 row = self.db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
-            elif username and row["username"] != username:
-                self.db.execute("UPDATE users SET username = ? WHERE id = ?", (username, user_id))
-                self.db.commit()
+            else:
+                changed = False
+                if username and row["username"] != username:
+                    self.db.execute("UPDATE users SET username = ? WHERE id = ?",
+                                    (username, user_id))
+                    changed = True
+                if source and not row["source"]:
+                    self.db.execute("UPDATE users SET source = ? WHERE id = ?",
+                                    (source, user_id))
+                    changed = True
+                if changed:
+                    self.db.commit()
             return dict(row)
+
+    def stats_by_source(self) -> list[dict]:
+        with self.lock:
+            rows = self.db.execute(
+                "SELECT source, COUNT(*) AS count FROM users GROUP BY source"
+                " ORDER BY count DESC").fetchall()
+        return [dict(r) for r in rows]
+
+    def top_referrers(self, limit: int = 10) -> list[dict]:
+        with self.lock:
+            rows = self.db.execute(
+                "SELECT u2.id, u2.username, COUNT(*) AS invites, u2.balance"
+                " FROM users u1 JOIN users u2 ON u1.ref_id = u2.id"
+                " GROUP BY u2.id ORDER BY invites DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
 
     def add_balance(self, user_id: int, amount: int) -> None:
         with self.lock:
