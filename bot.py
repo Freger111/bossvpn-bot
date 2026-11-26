@@ -115,8 +115,16 @@ class VpnBot:
         return self.panels.get(config.DEFAULT_LOCATION)
 
     def panel_for(self, payload: str):
-        """Панель сервера, которому принадлежит ключ."""
-        return self.panels.get(self.db.key_location(payload))
+        """Панель сервера, которому принадлежит ключ; при отсутствии сессии — подключается."""
+        code = self.db.key_location(payload)
+        if code not in self.panels:
+            loc = config.location(code)
+            if loc["code"] == code and loc["url"]:
+                try:
+                    self.panels[code] = server_mod.Panel(loc["url"], loc["user"], loc["pass"])
+                except Exception as exc:
+                    print(f"панель {code} недоступна:", exc)
+        return self.panels.get(code)
 
     def setup_profile(self) -> None:
         """Описание, короткое описание и меню команд бота в Telegram."""
