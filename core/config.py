@@ -63,13 +63,13 @@ def plan_image(code: str):
     return BASE / "vpn_brand" / f"plan_{code}.png"
 
 PLANS = [
-    {"code": "m1", "title": "1 месяц", "days": 30, "price": 199, "gb": 30,
+    {"code": "m1", "title": "1 месяц", "days": 30, "price": 99, "gb": 30,
      "devices": 4, "note": "30 ГБ · до 4 устройств"},
-    {"code": "m3", "title": "3 месяца", "days": 90, "price": 499, "gb": 100,
-     "devices": 6, "note": "100 ГБ · до 6 устройств · выгоднее на 17%"},
-    {"code": "y1", "title": "12 месяцев", "days": 365, "price": 1490, "gb": 500,
-     "devices": 10, "note": "500 ГБ · до 10 устройств · выгоднее на 38%"},
-    {"code": "p1", "title": "1 месяц Premium", "days": 30, "price": 249, "gb": 50,
-     "devices": 6, "note": "50 ГБ · виден пинг · до 6 устройств"},
+    {"code": "m3", "title": "3 месяца", "days": 90, "price": 199, "gb": 100,
+     "devices": 6, "note": "100 ГБ · до 6 устройств"},
+    {"code": "m6", "title": "6 месяцев", "days": 180, "price": 349, "gb": 200,
+     "devices": 8, "note": "200 ГБ · до 8 устройств"},
+    {"code": "y1", "title": "12 месяцев", "days": 365, "price": 599, "gb": 500,
+     "devices": 10, "note": "500 ГБ · до 10 устройств"},
 ]
 TRIAL_GB = 20
