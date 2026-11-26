@@ -84,10 +84,24 @@ def admin_panel() -> dict:
             {"text": "📈 Источники", "callback_data": "adm:sources"},
             {"text": "👥 Рефералы", "callback_data": "adm:refs"},
         ],
-        [{"text": "🔑 Ключей в наличии", "callback_data": "adm:keys"}],
+        [
+            {"text": "🔑 Ключей в наличии", "callback_data": "adm:keys"},
+            {"text": "⭐ Отзывы", "callback_data": "adm:reviews"},
+        ],
         [{"text": "🔄 Синхронизировать ключи с сервера", "callback_data": "adm:keysync"}],
         [{"text": "← Меню", "callback_data": "menu"}],
     ]}
+
+
+def review_stars() -> dict:
+    return {"inline_keyboard": [
+        [{"text": "⭐" * n, "callback_data": f"rate:{n}"} for n in (5, 4, 3)],
+        [{"text": "⭐" * n, "callback_data": f"rate:{n}"} for n in (2, 1)],
+    ]}
+
+
+def stars(rating: int) -> str:
+    return "⭐" * rating + "☆" * (5 - rating)
 
 
 def back(to: str = "menu", label: str = "← Назад") -> dict:

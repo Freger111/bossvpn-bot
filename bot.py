@@ -1,6 +1,7 @@
 """VPN-бот: покупка тарифа, оплата, выдача ключа, подписка, админка."""
 from __future__ import annotations
 
+import html
 import json
 import os
 import ssl
@@ -78,6 +79,7 @@ class VpnBot:
         self.offset = 0
         self.username = ""
         self.awaiting_key: dict[int, dict] = {}
+        self.awaiting_review: dict[int, int] = {}
         self.panel = None
         self._last_card_check = 0.0
         self._last_remind = 0.0
@@ -512,6 +514,19 @@ class VpnBot:
                      f"Оплаченных заказов: {stats['paid_orders']}\n"
                      f"Выручка: {kb.money(stats['revenue'])}",
                      kb.back("adm", "← Админ"))
+        elif action == "reviews":
+            st = self.db.review_stats()
+            lines = ["⭐ <b>Отзывы</b>\n",
+                     f"Средняя оценка: <b>{st['avg']:.1f}</b> из 5 · всего {st['count']}"]
+            lines += [f"{kb.stars(n)} — {st['dist'].get(n, 0)}" for n in (5, 4, 3, 2, 1)]
+            recent = self.db.recent_reviews(5)
+            if recent:
+                lines.append("\n<b>Последние:</b>")
+                for r in recent:
+                    who = f"@{r['username']}" if r.get("username") else f"id {r['user_id']}"
+                    lines.append(f"\n{kb.stars(r['rating'])} {html.escape(who)}\n"
+                                 f"{html.escape(r['text'][:300])}")
+            self.say(chat_id, "\n".join(lines), kb.back("adm", "← Админ"))
         elif action == "keys":
             pool = self.db.pool()
             lines = [f"🔑 <b>Ключи</b> (всего {len(pool)})\n"]
@@ -644,6 +659,9 @@ class VpnBot:
             task = self.awaiting_key.pop(user_id)
             self.apply_key_action(chat_id, task, text)
             return
+        if user_id in self.awaiting_review and text and not text.startswith("/"):
+            self.save_review_text(chat_id, user_id, frm, text)
+            return
 
         if text.startswith("/start"):
             payload = text.split(maxsplit=1)[1].strip() if len(text.split(maxsplit=1)) > 1 else ""
@@ -667,7 +685,8 @@ class VpnBot:
     def on_callback(self, query: dict) -> None:
         data = query.get("data") or ""
         chat_id = query["message"]["chat"]["id"]
-        user_id = query["from"]["id"]
+        frm = query.get("from") or {}
+        user_id = frm["id"]
         self.tg.call("answerCallbackQuery", callback_query_id=query["id"])
 
         if data == "menu":
@@ -712,6 +731,10 @@ class VpnBot:
             self.cmd_enot_payment(chat_id, user_id, int(data[5:]))
         elif data.startswith("checkpay:"):
             self.check_card_payment(chat_id, int(data[9:]))
+        elif data.startswith("rate:") and data[5:].isdigit():
+            self.rate(chat_id, user_id, frm, int(data[5:]))
+        elif data.startswith("revpub:") and data[7:].isdigit():
+            self.publish_review(chat_id, user_id, int(data[7:]))
         elif data == "adm":
             if self.is_admin(user_id):
                 self.say(chat_id, "⚙️ Админ-панель", kb.admin_panel())
@@ -776,10 +799,11 @@ class VpnBot:
                             self.db.set_status(order["id"], "new")
                 except Exception as exc:
                     print("card check:", exc)
-        # напоминания об окончании подписки
+        # напоминания об окончании подписки и просьбы об отзыве
         if now - self._last_remind >= 3600:
             self._last_remind = now
             self.send_reminders()
+            self.send_review_requests()
 
     def send_reminders(self) -> None:
         today = time.strftime("%Y-%m-%d")
@@ -795,6 +819,89 @@ class VpnBot:
                 self.db.set_reminded(sub["user_id"], today)
             except Exception as exc:
                 print("reminder:", exc)
+
+    # ---------- отзывы ----------
+    def send_review_requests(self) -> None:
+        if config.REVIEW_AFTER_DAYS <= 0:
+            return
+        for uid in self.db.review_candidates(config.REVIEW_AFTER_DAYS):
+            self.db.set_review_asked(uid)
+            try:
+                self.say(uid,
+                         f"⭐ <b>Как вам {config.BRAND}?</b>\n\n"
+                         f"Вы с нами уже несколько дней. Оцените VPN — это одно нажатие, "
+                         f"а нам очень поможет стать лучше.",
+                         kb.review_stars())
+            except Exception as exc:
+                print("review request:", exc)
+
+    def notify_admins(self, text: str, markup: dict | None = None) -> None:
+        for admin in self.admins:
+            try:
+                self.say(admin, text, markup)
+            except Exception as exc:
+                print("notify admin:", exc)
+
+    @staticmethod
+    def who(user_id: int, frm: dict) -> str:
+        name = html.escape(frm.get("username") or frm.get("first_name") or "")
+        return f"{'@' if frm.get('username') else ''}{name} (<code>{user_id}</code>)".strip()
+
+    def rate(self, chat_id: int, user_id: int, frm: dict, rating: int) -> None:
+        rating = max(1, min(5, rating))
+        review_id = self.db.add_review(user_id, rating)
+        self.awaiting_review[user_id] = review_id
+        if rating >= 4:
+            text = ("🙏 <b>Спасибо за оценку!</b>\n\n"
+                    "Напишите пару слов — что понравилось? Лучшие отзывы мы публикуем.")
+        else:
+            text = ("😔 <b>Жаль, что не всё понравилось.</b>\n\n"
+                    "Напишите, что пошло не так, — передадим в поддержку и поможем разобраться.")
+        self.say(chat_id, text, kb.back("menu", "Пропустить"))
+        self.notify_admins(f"⭐ <b>Новая оценка</b> {kb.stars(rating)}\n\n"
+                           f"От: {self.who(user_id, frm)}")
+
+    def save_review_text(self, chat_id: int, user_id: int, frm: dict, text: str) -> None:
+        review_id = self.awaiting_review.pop(user_id)
+        review = self.db.review(review_id)
+        if not review:
+            return
+        text = text[:1000]
+        self.db.set_review_text(review_id, text)
+        if review["rating"] >= 4:
+            self.say(chat_id, "💙 Спасибо! Нам очень приятно.", kb.main_menu(self.is_admin(user_id)))
+        else:
+            self.say(chat_id, f"Спасибо, что написали. Поддержка уже в курсе и свяжется с вами. "
+                              f"Если срочно — {config.SUPPORT}",
+                     kb.main_menu(self.is_admin(user_id)))
+        markup = None
+        if config.REVIEWS_CHANNEL and review["rating"] >= 4:
+            markup = {"inline_keyboard": [[{"text": "📢 Опубликовать в канал",
+                                            "callback_data": f"revpub:{review_id}"}]]}
+        self.notify_admins(f"💬 <b>Отзыв</b> {kb.stars(review['rating'])}\n\n"
+                           f"От: {self.who(user_id, frm)}\n\n{html.escape(text)}", markup)
+
+    def publish_review(self, chat_id: int, user_id: int, review_id: int) -> None:
+        if not self.is_admin(user_id):
+            return
+        review = self.db.review(review_id)
+        if not review or not review["text"] or not config.REVIEWS_CHANNEL:
+            self.say(chat_id, "Отзыв не найден или канал не настроен (REVIEWS_CHANNEL).")
+            return
+        if review["published"]:
+            self.say(chat_id, "Этот отзыв уже опубликован.")
+            return
+        try:
+            self.say(config.REVIEWS_CHANNEL,
+                     f"{kb.stars(review['rating'])}\n\n"
+                     f"«{html.escape(review['text'])}»\n\n"
+                     f"— клиент {config.BRAND}\n\n"
+                     f"🛡 Подключить: https://t.me/{config.BOT_USER}?start=src_reviews")
+            self.db.set_review_published(review_id)
+            self.say(chat_id, "✅ Опубликовано в канале.")
+        except Exception as exc:
+            self.say(chat_id, f"❌ Не удалось опубликовать: {exc}\n"
+                              f"Проверьте, что бот — админ канала {config.REVIEWS_CHANNEL}.")
 
     def poll(self) -> None:
         while True:
@@ -873,6 +980,21 @@ def selftest() -> int:
     stats = db.stats()
     check("выручка посчитана", stats["revenue"] == config.PLANS[0]["price"]
           and stats["paid_orders"] == 1)
+
+    print("7. Отзывы")
+    db.db.execute("UPDATE orders SET created_at = created_at - 10 * 86400")
+    bot.send_review_requests()
+    check("просьба об оценке отправлена", "rate:5" in json.dumps(t.calls[-1][1]))
+    bot.send_review_requests()
+    check("повторно не спрашиваем", not db.review_candidates(0))
+    bot.on_callback({"id": "q", "data": "rate:5", "from": {"id": 42, "username": "user42"},
+                     "message": {"chat": {"id": 42}, "message_id": 1}})
+    bot.on_message({"chat": {"id": 42}, "from": {"id": 42, "username": "user42"},
+                    "text": "Летает!"})
+    st = db.review_stats()
+    check("отзыв сохранён", st["count"] == 1 and db.recent_reviews(1)[0]["text"] == "Летает!")
+    bot.admin_action(1, 1, "reviews")
+    check("отзывы в админке", "Летает!" in t.calls[-1][1]["text"])
 
     print("\nИтог:", "всё работает" if ok else "есть ошибки")
     return 0 if ok else 1

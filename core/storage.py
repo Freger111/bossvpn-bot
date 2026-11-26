@@ -43,6 +43,14 @@ CREATE TABLE IF NOT EXISTS subs (
     reminded_day TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (user_id)
 );
+CREATE TABLE IF NOT EXISTS reviews (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL,
+    rating     INTEGER NOT NULL,
+    text       TEXT NOT NULL DEFAULT '',
+    published  INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -72,6 +80,9 @@ class Storage:
             if "source" not in cols:
                 self.db.execute(
                     "ALTER TABLE users ADD COLUMN source TEXT NOT NULL DEFAULT ''")
+            if "review_asked" not in cols:
+                self.db.execute(
+                    "ALTER TABLE users ADD COLUMN review_asked INTEGER NOT NULL DEFAULT 0")
             cols = {r["name"] for r in self.db.execute("PRAGMA table_info(keys_pool)")}
             if "comment" not in cols:
                 self.db.execute(
@@ -274,6 +285,62 @@ class Storage:
         with self.lock:
             row = self.db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         return dict(row) if row else {}
+
+    # ---------- отзывы ----------
+    def review_candidates(self, after_days: int) -> list[int]:
+        """Покупатели, у которых первая оплата старше after_days и отзыв ещё не просили."""
+        border = int(time.time()) - after_days * 86400
+        with self.lock:
+            rows = self.db.execute(
+                "SELECT o.user_id FROM orders o JOIN users u ON u.id = o.user_id"
+                " WHERE o.status = 'paid' AND u.review_asked = 0"
+                " GROUP BY o.user_id HAVING MIN(o.created_at) <= ?", (border,)).fetchall()
+        return [int(r["user_id"]) for r in rows]
+
+    def set_review_asked(self, user_id: int) -> None:
+        with self.lock:
+            self.db.execute("UPDATE users SET review_asked = 1 WHERE id = ?", (user_id,))
+            self.db.commit()
+
+    def add_review(self, user_id: int, rating: int) -> int:
+        with self.lock:
+            cur = self.db.execute(
+                "INSERT INTO reviews(user_id, rating, created_at) VALUES(?,?,?)",
+                (user_id, rating, int(time.time())))
+            self.db.commit()
+            return int(cur.lastrowid)
+
+    def set_review_text(self, review_id: int, text: str) -> None:
+        with self.lock:
+            self.db.execute("UPDATE reviews SET text = ? WHERE id = ?", (text, review_id))
+            self.db.commit()
+
+    def review(self, review_id: int) -> dict:
+        with self.lock:
+            row = self.db.execute("SELECT * FROM reviews WHERE id = ?",
+                                  (review_id,)).fetchone()
+        return dict(row) if row else {}
+
+    def set_review_published(self, review_id: int) -> None:
+        with self.lock:
+            self.db.execute("UPDATE reviews SET published = 1 WHERE id = ?", (review_id,))
+            self.db.commit()
+
+    def review_stats(self) -> dict:
+        with self.lock:
+            rows = self.db.execute(
+                "SELECT rating, COUNT(*) c FROM reviews GROUP BY rating").fetchall()
+        dist = {int(r["rating"]): int(r["c"]) for r in rows}
+        count = sum(dist.values())
+        avg = sum(k * v for k, v in dist.items()) / count if count else 0.0
+        return {"count": count, "avg": avg, "dist": dist}
+
+    def recent_reviews(self, limit: int = 5) -> list[dict]:
+        with self.lock:
+            rows = self.db.execute(
+                "SELECT r.*, u.username FROM reviews r LEFT JOIN users u ON u.id = r.user_id"
+                " WHERE r.text != '' ORDER BY r.id DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
 
     def setting(self, key: str, default: str = "") -> str:
         with self.lock:
