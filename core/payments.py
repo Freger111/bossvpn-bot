@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 
@@ -94,3 +95,38 @@ def lava_status(shop_id: str, secret: str, order_id: int) -> str:
     result = _lava_post(secret, "/business/invoice/status",
                         {"shopId": shop_id, "orderId": str(order_id)})
     return ((result.get("data") or {}).get("status")) or "unknown"
+
+
+# ---------------------------------------------------------------- Enot
+ENOT = "https://api.enot.io"
+
+
+def enot_create_invoice(api_key: str, shop_id: str, amount_rub: int, order_id: int) -> str:
+    """Создаёт платёж в Enot, возвращает ссылку на оплату."""
+    req = urllib.request.Request(
+        ENOT + "/invoice/create",
+        data=json.dumps({"amount": float(amount_rub), "order_id": str(order_id),
+                         "currency": "RUB", "shop_id": shop_id,
+                         "comment": f"БоссVPN заказ #{order_id}", "expire": 60}).encode(),
+        headers={"Accept": "application/json", "Content-Type": "application/json",
+                 "x-api-key": api_key})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        return ""
+    return ((data.get("data") or {}).get("url")) or ""
+
+
+def enot_status(api_key: str, shop_id: str, invoice_id: str) -> str:
+    """status: paid / expired / fail / pending / unknown."""
+    url = (ENOT + "/invoice/info?" + urllib.parse.urlencode(
+        {"invoice_id": invoice_id, "shop_id": shop_id}))
+    req = urllib.request.Request(url, headers={"Accept": "application/json",
+                                               "x-api-key": api_key})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return "unknown"
+    return ((data.get("data") or {}).get("status")) or "unknown"
