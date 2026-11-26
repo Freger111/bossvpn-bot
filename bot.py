@@ -6,6 +6,7 @@ import json
 import os
 import ssl
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -85,6 +86,8 @@ class VpnBot:
         self._last_card_check = 0.0
         self._last_remind = 0.0
         self._last_health = 0.0
+        self._health_thread: threading.Thread | None = None
+        self._health_result: tuple[dict, dict] | None = None
         self._alerts: set[str] = set()
         for loc in config.LOCATIONS:
             if not loc["url"]:
@@ -1009,9 +1012,16 @@ class VpnBot:
                 except Exception as exc:
                     print("card check:", exc)
         # здоровье панелей и остаток ключей
-        if now - self._last_health >= 600:
+        if self._health_result is not None:
+            errors, fresh = self._health_result
+            self._health_result = None
+            self.panels.update(fresh)
+            self.check_health(errors)
+        if now - self._last_health >= 600 and not (
+                self._health_thread and self._health_thread.is_alive()):
             self._last_health = now
-            self.check_health()
+            self._health_thread = threading.Thread(target=self._probe_worker, daemon=True)
+            self._health_thread.start()
         # напоминания об окончании подписки и просьбы об отзыве
         if now - self._last_remind >= 3600:
             self._last_remind = now
@@ -1035,28 +1045,36 @@ class VpnBot:
                 print("reminder:", exc)
 
     # ---------- алерты админу ----------
-    def check_panel(self, loc: dict) -> str:
-        """Пустая строка, если панель отвечает; иначе текст ошибки. Перелогинивается при сбое."""
-        panel = self.panels.get(loc["code"])
-        if panel:
+    @staticmethod
+    def probe_panels() -> tuple[dict, dict]:
+        """Новая сессия к каждой панели: ошибки по коду локации и рабочие панели.
+        Общие объекты бота не трогает, поэтому безопасно выполняется в отдельном потоке."""
+        errors, fresh = {}, {}
+        for loc in config.LOCATIONS:
+            if not loc["url"]:
+                continue
             try:
+                panel = server_mod.Panel(loc["url"], loc["user"], loc["pass"])
                 panel.list_clients()
-                return ""
-            except Exception:
-                pass
-        try:
-            panel = server_mod.Panel(loc["url"], loc["user"], loc["pass"])
-            panel.list_clients()
-            self.panels[loc["code"]] = panel
-            return ""
-        except Exception as exc:
-            return str(exc)[:200] or exc.__class__.__name__
+                fresh[loc["code"]] = panel
+            except Exception as exc:
+                errors[loc["code"]] = str(exc)[:200] or exc.__class__.__name__
+        return errors, fresh
 
-    def check_health(self) -> None:
+    def _probe_worker(self) -> None:
+        try:
+            self._health_result = self.probe_panels()
+        except Exception as exc:
+            print("health:", exc)
+
+    def check_health(self, errors: dict | None = None) -> None:
+        if errors is None:
+            errors, fresh = self.probe_panels()
+            self.panels.update(fresh)
         active: dict[str, str] = {}
         for loc in config.LOCATIONS:
             if loc["url"]:
-                error = self.check_panel(loc)
+                error = errors.get(loc["code"])
                 if error:
                     active[f"panel:{loc['code']}"] = (
                         f"🔴 Панель {loc['name']} не отвечает: {html.escape(error)}")

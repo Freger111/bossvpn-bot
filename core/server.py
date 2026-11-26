@@ -48,6 +48,8 @@ class Panel:
 
     def list_clients(self) -> list[dict]:
         result = self._request("GET", "/panel/api/clients/list")
+        if result.get("success") is False:
+            raise RuntimeError(f"панель вернула ошибку: {result.get('msg')}")
         return result.get("obj") or []
 
     def traffic(self, email: str) -> dict:
