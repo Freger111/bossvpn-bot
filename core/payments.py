@@ -53,3 +53,37 @@ def get_payment(shop_id: str, secret: str, payment_id: str) -> dict:
 
 def status(payment: dict) -> str:
     return payment.get("status", "unknown")
+
+
+# ---------------------------------------------------------------- Lava
+LAVA = "https://api.lava.ru"
+
+
+def lava_create_invoice(shop_id: str, secret: str, amount_rub: int, order_id: int) -> str:
+    """Создаёт счёт в Lava, возвращает ссылку на оплату."""
+    req = urllib.request.Request(
+        LAVA + "/business/invoice/create",
+        data=json.dumps({"sum": float(amount_rub), "orderId": str(order_id),
+                         "shopId": shop_id, "expire": 60,
+                         "comment": f"БоссVPN заказ #{order_id}"}).encode(),
+        headers={"Authorization": secret, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        return ""
+    return ((data.get("data") or {}).get("url")) or ""
+
+
+def lava_status(shop_id: str, secret: str, order_id: int) -> str:
+    """status: success / pending / fail / None."""
+    req = urllib.request.Request(
+        LAVA + "/business/invoice/status",
+        data=json.dumps({"shopId": shop_id, "orderId": str(order_id)}).encode(),
+        headers={"Authorization": secret, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return "unknown"
+    return ((data.get("data") or {}).get("status")) or "unknown"
