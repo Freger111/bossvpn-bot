@@ -141,7 +141,7 @@ def plan_image(code: str):
     return BASE / "vpn_brand" / f"plan_{code}.png"
 
 PLANS = [
-    {"code": "m1", "title": "1 месяц", "days": 30, "price": 99, "gb": 30,
+    {"code": "m1", "title": "1 месяц", "days": 30, "price": 69, "gb": 30,
      "devices": 4, "note": "30 ГБ · до 4 устройств"},
     {"code": "m3", "title": "3 месяца", "days": 90, "price": 199, "gb": 100,
      "devices": 6, "note": "100 ГБ · до 6 устройств"},
