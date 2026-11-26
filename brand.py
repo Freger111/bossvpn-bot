@@ -122,13 +122,13 @@ def main() -> None:
     banner(1280, 640).save(OUT / "banner_1280x640.png")
     promo(1080).save(OUT / "promo_1080.png")
 
-    plan_card("1 месяц", "30 дней", "30 ГБ", "199 ₽").save(OUT / "plan_m1.png")
-    plan_card("3 месяца", "90 дней", "100 ГБ", "499 ₽",
+    plan_card("1 месяц", "30 дней", "30 ГБ", "99 ₽").save(OUT / "plan_m1.png")
+    plan_card("3 месяца", "90 дней", "100 ГБ", "199 ₽",
               accent=(124, 92, 255)).save(OUT / "plan_m3.png")
-    plan_card("12 месяцев", "365 дней", "500 ГБ", "1490 ₽",
+    plan_card("6 месяцев", "180 дней", "200 ГБ", "349 ₽",
+              accent=(255, 178, 60)).save(OUT / "plan_m6.png")
+    plan_card("12 месяцев", "365 дней", "500 ГБ", "599 ₽",
               accent=(46, 214, 118)).save(OUT / "plan_y1.png")
-    plan_card("Premium", "30 дней", "200 ГБ", "249 ₽",
-              accent=(255, 178, 60)).save(OUT / "plan_p1.png")
     print("готово:", [p.name for p in sorted(OUT.glob("*.png"))])
 
 
