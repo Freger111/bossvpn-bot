@@ -124,8 +124,8 @@ class VpnBot:
 
     # ---------- витрина ----------
     def welcome(self, chat_id: int, user_id: int, username: str = "",
-                ref_id: int | None = None) -> None:
-        self.db.ensure_user(user_id, username, ref_id)
+                ref_id: int | None = None, source: str = "") -> None:
+        self.db.ensure_user(user_id, username, ref_id, source)
         caption = (f"🛡 <b>{config.BRAND}</b> — VPN без логов и тормозов.\n\n"
                    f"Подключение за 2 минуты. iOS, Android, Windows.\n"
                    f"Оплата по СБП — ключ приходит сразу после подтверждения.\n\n"
@@ -495,6 +495,24 @@ class VpnBot:
             self.say(chat_id, "\n".join(lines), {"inline_keyboard": rows})
         elif action == "keysync":
             self.sync_keys(chat_id)
+        elif action == "sources":
+            rows = self.db.stats_by_source()
+            lines = ["📈 <b>Источники трафика</b>\n"]
+            if not rows:
+                lines.append("Пока нет данных — нужны переходы по рекламным ссылкам.")
+            for r in rows:
+                src = r["source"] or "прямой вход"
+                lines.append(f"· {src}: {r['count']}")
+            self.say(chat_id, "\n".join(lines), kb.back("adm", "← Админ"))
+        elif action == "refs":
+            refs = self.db.top_referrers(10)
+            lines = ["👥 <b>Топ приглашающих</b>\n"]
+            if not refs:
+                lines.append("Пока никто не привёл друзей.")
+            for r in refs:
+                name = r["username"] or f"id{r['id']}"
+                lines.append(f"· @{name}: {r['invites']} пригл. · бонус {kb.money(r['balance'])}")
+            self.say(chat_id, "\n".join(lines), kb.back("adm", "← Админ"))
         elif action.startswith("key:"):
             key_id = int(action.split(":")[1])
             key = next((k for k in self.db.pool() if k["id"] == key_id), None)
@@ -602,9 +620,13 @@ class VpnBot:
         if text.startswith("/start"):
             payload = text.split(maxsplit=1)[1].strip() if len(text.split(maxsplit=1)) > 1 else ""
             ref_id = None
+            source = "direct"
             if payload.startswith("ref_") and payload[4:].isdigit():
                 ref_id = int(payload[4:])
-            self.welcome(chat_id, user_id, frm.get("username", ""), ref_id)
+                source = "ref"
+            elif payload.startswith("src_"):
+                source = "src_" + payload[4:]
+            self.welcome(chat_id, user_id, frm.get("username", ""), ref_id, source)
         elif text.startswith("/id"):
             self.say(chat_id, f"Ваш Telegram ID: <code>{user_id}</code>")
         elif text.startswith("/version"):
