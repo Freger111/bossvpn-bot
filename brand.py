@@ -135,6 +135,10 @@ def icon(d: ImageDraw.ImageDraw, kind: str, cx: int, cy: int, r: int, color) -> 
                   fill=color)
 
 
+def per_month(plan: dict) -> int:
+    return round(plan["price"] / max(1, plan["days"] / 30))
+
+
 def avatar(size: int = 512) -> Image.Image:
     img = cover(Image.open(SRC / "emblem.png").convert("RGB"), size, size)
     img = ImageEnhance.Contrast(img).enhance(1.08)
@@ -157,7 +161,7 @@ def banner(w: int = 1280, h: int = 640) -> Image.Image:
     d = ImageDraw.Draw(img)
     d.text((left, int(h * 0.50)), "Быстрый. Стабильный. Твой.",
            font=font(int(h * 0.058), "SemiBold"), fill=SOFT)
-    price = min(p["price"] for p in config.PLANS)
+    price = min(per_month(p) for p in config.PLANS)
     x = left
     for chip in ("iOS", "Android", "Windows"):
         x += pill(img, (x, int(h * 0.65)), chip, font(24, "SemiBold"),
@@ -200,9 +204,8 @@ def plan_card(plan: dict, size: int = 1080) -> Image.Image:
         pill(img, (size - 90 - bw, 88), BADGES[plan["code"]], fnt, accent, INK)
 
     glow_text(img, (86, 190), plan["title"], font(96, "Bold", True), WHITE, accent, 30)
-    per_month = round(plan["price"] / max(1, plan["days"] / 30))
     d = ImageDraw.Draw(img)
-    d.text((90, 330), f"≈ {per_month} ₽ в месяц", font=font(40, "SemiBold"), fill=SOFT)
+    d.text((90, 330), f"≈ {per_month(plan)} ₽ в месяц", font=font(40, "SemiBold"), fill=SOFT)
 
     box = (80, 420, size - 80, 790)
     glass(img, box, 40)
