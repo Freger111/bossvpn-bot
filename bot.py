@@ -80,15 +80,24 @@ class VpnBot:
         self.username = ""
         self.awaiting_key: dict[int, dict] = {}
         self.awaiting_review: dict[int, int] = {}
-        self.panel = None
+        self.panels: dict[str, server_mod.Panel] = {}
         self._last_card_check = 0.0
         self._last_remind = 0.0
-        if config.PANEL_URL:
+        for loc in config.LOCATIONS:
+            if not loc["url"]:
+                continue
             try:
-                self.panel = server_mod.Panel(config.PANEL_URL, config.PANEL_USER,
-                                              config.PANEL_PASS)
+                self.panels[loc["code"]] = server_mod.Panel(loc["url"], loc["user"], loc["pass"])
             except Exception as exc:
-                print("панель недоступна:", exc)
+                print(f"панель {loc['code']} недоступна:", exc)
+
+    @property
+    def panel(self):
+        return self.panels.get(config.DEFAULT_LOCATION)
+
+    def panel_for(self, payload: str):
+        """Панель сервера, которому принадлежит ключ."""
+        return self.panels.get(self.db.key_location(payload))
 
     def setup_profile(self) -> None:
         """Описание, короткое описание и меню команд бота в Telegram."""
@@ -160,10 +169,12 @@ class VpnBot:
             return
         left = self.db.keys_left(plan_code)
         icon = kb.PLAN_ICONS.get(plan_code, "🛡")
+        places = " · ".join(loc["name"] for loc in config.LOCATIONS)
         text = (f"{icon} <b>{plan['title']}</b> · {kb.money(plan['price'])}\n\n"
                 f"📅 {plan['days']} дней доступа\n"
                 f"📦 {plan.get('gb', 0)} ГБ трафика\n"
                 f"📱 до {plan.get('devices', 1)} устройств\n"
+                f"🌍 {places}\n"
                 f"⚡ VLESS · Reality\n\n"
                 f"💡 Выходит ≈ <b>{kb.per_month(plan)} ₽ в месяц</b>")
         if left == 0:
@@ -174,19 +185,35 @@ class VpnBot:
                        kb.plan_card(plan_code))
 
     # ---------- покупка ----------
-    def start_purchase(self, chat_id: int, user_id: int, plan_code: str) -> None:
+    def start_purchase(self, chat_id: int, user_id: int, plan_code: str,
+                       location: str = "") -> None:
         plan = next((p for p in config.PLANS if p["code"] == plan_code), None)
         if plan is None:
             return
+        if location not in {loc["code"] for loc in config.LOCATIONS}:
+            location = ""
+        if not location:
+            available = [loc["code"] for loc in config.LOCATIONS
+                         if self.db.keys_left(plan_code, loc["code"])]
+            if len(available) > 1:
+                self.say(chat_id, f"🌍 <b>Выберите страну сервера</b>\n\n"
+                                  f"Тариф: {plan['title']} · {kb.money(plan['price'])}\n"
+                                  f"Чем ближе сервер — тем выше скорость.",
+                         kb.locations(plan_code, available))
+                return
+            location = available[0] if available else ""
         user = self.db.ensure_user(user_id)
         balance = user.get("balance") or 0
         balance_used = min(balance, plan["price"])
         price = plan["price"] - balance_used
-        order_id = self.db.create_order(user_id, plan, price=price, balance_used=balance_used)
+        order_id = self.db.create_order(user_id, plan, price=price, balance_used=balance_used,
+                                        location=location)
         if balance_used:
             self.db.add_balance(user_id, -balance_used)
-        text = (f"🧾 <b>Заказ #{order_id}</b> · {plan['title']}\n\n"
-                f"К оплате: <b>{kb.money(price)}</b>")
+        text = f"🧾 <b>Заказ #{order_id}</b> · {plan['title']}\n\n"
+        if location and len(config.LOCATIONS) > 1:
+            text += f"Сервер: {config.location(location)['name']}\n"
+        text += f"К оплате: <b>{kb.money(price)}</b>"
         if balance_used:
             text += f"\n🎁 Бонусами списано: {kb.money(balance_used)}"
         text += (f"\n\n<b>Оплата по СБП</b>\n"
@@ -370,13 +397,14 @@ class VpnBot:
                         total_gb: int = 0, limit_ip: int = 0) -> tuple[str, str]:
         """Ставит срок, трафик, лимит устройств, имя на сервере и возвращает Happ-ссылку."""
         happ, email = "", ""
-        if not self.panel:
+        panel = self.panel_for(payload)
+        if not panel:
             return happ, email
         uuid = server_mod.uuid_from_payload(payload)
         if not uuid:
             return happ, email
         try:
-            client = self.panel.find_by_uuid(uuid)
+            client = panel.find_by_uuid(uuid)
             if client:
                 email = client.get("email") or ""
                 fields = {"email": email, "enable": True}   # enable обязательно, иначе отключится
@@ -391,7 +419,7 @@ class VpnBot:
                         ch for ch in rename_to if ch.isalnum() or ch in "_@-")[:24] \
                         or f"client{uuid[:6]}"
                     taken = any(c["email"] == new_email and c["uuid"] != uuid
-                                for c in self.panel.list_clients())
+                                for c in panel.list_clients())
                     if taken:
                         new_email += f"-{uuid[:6]}"
                     fields["email"] = new_email
@@ -399,8 +427,8 @@ class VpnBot:
                 if comment and (client.get("comment") or "") != comment:
                     fields["comment"] = comment
                 if len(fields) > 1 or fields.get("email") != client.get("email"):
-                    self.panel.update(client.get("email") or "", fields)
-                happ = self.panel.happ_link(client["id"])
+                    panel.update(client.get("email") or "", fields)
+                happ = panel.happ_link(client["id"])
         except Exception as exc:
             print("sync_server_sub:", exc)
         return happ, email
@@ -409,7 +437,7 @@ class VpnBot:
         order = self.db.order(order_id)
         if not order or order["status"] != "awaiting":
             return
-        key = self.db.take_key(order["plan_code"], order_id)
+        key = self.db.take_key(order["plan_code"], order_id, order.get("location") or "")
         if key is None:
             self.say(order["user_id"],
                      "⚠️ Ключи для этого тарифа временно закончились. Оплата сохранена — "
@@ -466,12 +494,15 @@ class VpnBot:
         if balance:
             lines.append(f"🎁 Бонусный баланс: <b>{kb.money(balance)}</b> "
                          f"(спишется при следующей покупке)")
+        if len(config.LOCATIONS) > 1:
+            lines.append(f"🌍 Сервер: {config.location(self.db.key_location(sub['payload']))['name']}")
         key_uuid = server_mod.uuid_from_payload(sub["payload"])
-        if key_uuid and self.panel:
+        panel = self.panel_for(sub["payload"])
+        if key_uuid and panel:
             try:
-                client = self.panel.find_by_uuid(key_uuid)
+                client = panel.find_by_uuid(key_uuid)
                 if client:
-                    traffic = self.panel.traffic(client.get("email") or "")
+                    traffic = panel.traffic(client.get("email") or "")
                     used_bytes = (traffic.get("up") or 0) + (traffic.get("down") or 0)
                     used_gb = used_bytes / 1024 ** 3
                     total_gb = client.get("totalGB") or 0
@@ -535,7 +566,7 @@ class VpnBot:
                 uuid = server_mod.uuid_from_payload(k["payload"])
                 name = k["comment"] or (uuid[:8] if uuid else "ключ")
                 mark = " · выдан" if k["used"] else ""
-                lines.append(f"#{k['id']} {k['plan_code']} {name}{mark}")
+                lines.append(f"#{k['id']} {k['location']} {k['plan_code']} {name}{mark}")
                 rows.append([{"text": f"#{k['id']} {name}", "callback_data": f"key:{k['id']}"}])
             rows.append([{"text": "← Админ", "callback_data": "adm"}])
             self.say(chat_id, "\n".join(lines), {"inline_keyboard": rows})
@@ -566,11 +597,12 @@ class VpnBot:
                 return
             uuid = server_mod.uuid_from_payload(key["payload"])
             usage = ""
-            if uuid and self.panel:
+            panel = self.panels.get(key["location"])
+            if uuid and panel:
                 try:
-                    client = self.panel.find_by_uuid(uuid)
+                    client = panel.find_by_uuid(uuid)
                     if client:
-                        traffic = self.panel.traffic(client.get("email") or "")
+                        traffic = panel.traffic(client.get("email") or "")
                         used = (traffic.get("up") or 0) + (traffic.get("down") or 0)
                         usage = f"\nИзрасходовано: {server_mod.bytes_to_gb(used)}"
                 except Exception:
@@ -590,39 +622,38 @@ class VpnBot:
 
     # ---------- обработка ----------
     def sync_keys(self, chat_id: int) -> None:
-        """Тянет все ссылки с панели и раскладывает по тарифам (m1 → m3 → y1)."""
-        if not self.panel:
+        """Тянет ссылки со всех панелей и раскладывает по тарифам (m1 → m3 → y1) по кругу."""
+        if not self.panels:
             self.say(chat_id, "Панель не подключена — добавьте PANEL_URL в .env.")
             return
-        try:
-            links = self.panel.links()
-        except Exception as exc:
-            self.say(chat_id, f"Не удалось получить ключи с сервера: {exc}")
-            return
         existing = {k["payload"] for k in self.db.pool()}
-        fresh = [l for l in links if l.startswith("vless://") and l not in existing]
-        if not fresh:
-            left = {p["code"]: self.db.keys_left(p["code"]) for p in config.PLANS}
-            self.say(chat_id,
-                     "🔄 Всё синхронизировано.\n\n" +
-                     "\n".join(f"· {config.PLANS[i]['title']}: {left[p['code']]} шт."
-                               for i, p in enumerate(config.PLANS)),
-                     kb.back("adm", "← Админ"))
-            return
-        # все новые ссылки раскладываем по тарифам по кругу
-        pools: dict[str, list[str]] = {p["code"]: [] for p in config.PLANS}
-        codes = list(pools)
-        for i, link in enumerate(fresh):
-            pools[codes[i % len(codes)]].append(link)
-        for code in pools:
-            if pools[code]:
-                self.db.add_keys(code, pools[code])
-        left = {p["code"]: self.db.keys_left(p["code"]) for p in config.PLANS}
-        self.say(chat_id,
-                 f"✅ Добавлено ключей с сервера: <b>{len(fresh)}</b>\n\n" +
-                 "\n".join(f"· {config.PLANS[i]['title']}: {left[p['code']]} шт."
-                           for i, p in enumerate(config.PLANS)),
-                 kb.back("adm", "← Админ"))
+        codes = [p["code"] for p in config.PLANS]
+        added, errors = 0, []
+        for loc_code, panel in self.panels.items():
+            try:
+                links = panel.links()
+            except Exception as exc:
+                errors.append(f"{config.location(loc_code)['name']}: {exc}")
+                continue
+            fresh = [l for l in links if l.startswith("vless://") and l not in existing]
+            existing.update(fresh)
+            for i, code in enumerate(codes):
+                chunk = fresh[i::len(codes)]
+                if chunk:
+                    self.db.add_keys(code, chunk, loc_code)
+            added += len(fresh)
+        lines = [f"✅ Добавлено ключей с сервера: <b>{added}</b>" if added
+                 else "🔄 Всё синхронизировано."]
+        for loc in config.LOCATIONS:
+            if len(config.LOCATIONS) > 1:
+                lines.append(f"\n<b>{loc['name']}</b>")
+            else:
+                lines.append("")
+            lines += [f"· {p['title']}: {self.db.keys_left(p['code'], loc['code'])} шт."
+                      for p in config.PLANS]
+        if errors:
+            lines.append("\n⚠️ Не удалось получить ключи:\n" + "\n".join(errors))
+        self.say(chat_id, "\n".join(lines), kb.back("adm", "← Админ"))
 
     def apply_key_action(self, chat_id: int, task: dict, text: str) -> None:
         key = next((k for k in self.db.pool() if k["id"] == task["key_id"]), None)
@@ -630,20 +661,21 @@ class VpnBot:
             self.say(chat_id, "Ключ не найден.")
             return
         uuid = server_mod.uuid_from_payload(key["payload"])
-        if not uuid or not self.panel:
+        panel = self.panels.get(key["location"])
+        if not uuid or not panel:
             self.say(chat_id, "Панель сервера недоступна — действие невозможно.")
             return
         try:
-            client = self.panel.find_by_uuid(uuid)
+            client = panel.find_by_uuid(uuid)
             if client is None:
                 self.say(chat_id, "Клиент не найден на сервере.")
                 return
             email = client.get("email") or ""
             if task["act"] == "rename":
-                ok = self.panel.update(email, {"email": text})
+                ok = panel.update(email, {"email": text})
                 self.db.set_comment(uuid, text)
             else:
-                ok = self.panel.update(email, {"comment": text})
+                ok = panel.update(email, {"comment": text})
                 self.db.set_comment(uuid, text)
             self.say(chat_id, "✅ Готово" if ok else "❌ Не удалось обновить.")
         except Exception as exc:
@@ -696,7 +728,8 @@ class VpnBot:
         elif data.startswith("plan:"):
             self.show_plan(chat_id, data[5:])
         elif data.startswith("buy:"):
-            self.start_purchase(chat_id, user_id, data[4:])
+            plan_code, _, location = data[4:].partition(":")
+            self.start_purchase(chat_id, user_id, plan_code, location)
         elif data.startswith("paid:"):
             self.mark_paid(chat_id, user_id, int(data[5:]))
         elif data.startswith("cancel:"):
@@ -995,6 +1028,23 @@ def selftest() -> int:
     check("отзыв сохранён", st["count"] == 1 and db.recent_reviews(1)[0]["text"] == "Летает!")
     bot.admin_action(1, 1, "reviews")
     check("отзывы в админке", "Летает!" in t.calls[-1][1]["text"])
+
+    print("8. Локации")
+    config.LOCATIONS.append({"code": "fi", "name": "🇫🇮 Финляндия", "url": "", "user": "", "pass": ""})
+    db.add_keys("m3", ["vless://de-key"])
+    db.add_keys("m3", ["vless://fi-key"], "fi")
+    bot.start_purchase(42, 42, "m3")
+    check("предложен выбор страны", "buy:m3:fi" in json.dumps(t.calls[-1][1]))
+    bot.on_callback({"id": "q", "data": "buy:m3:fi", "from": {"id": 42},
+                     "message": {"chat": {"id": 42}, "message_id": 1}})
+    order_id = db.recent_orders(1)[0]["id"]
+    check("страна сохранена в заказе", db.order(order_id)["location"] == "fi")
+    db.set_status(order_id, "awaiting")
+    bot.deliver(order_id)
+    check("выдан ключ нужной страны", db.sub(42)["payload"] == "vless://fi-key")
+    bot.start_purchase(42, 42, "m3")
+    check("одна страна в наличии — без выбора", "СБП" in t.calls[-1][1]["text"])
+    config.LOCATIONS.pop()
 
     print("\nИтог:", "всё работает" if ok else "есть ошибки")
     return 0 if ok else 1
