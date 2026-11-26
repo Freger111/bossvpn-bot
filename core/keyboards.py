@@ -62,6 +62,10 @@ def admin_panel() -> dict:
     return {"inline_keyboard": [
         [{"text": "🧾 Заказы", "callback_data": "adm:orders"}],
         [{"text": "📊 Статистика", "callback_data": "adm:stats"}],
+        [
+            {"text": "📈 Источники", "callback_data": "adm:sources"},
+            {"text": "👥 Рефералы", "callback_data": "adm:refs"},
+        ],
         [{"text": "🔑 Ключей в наличии", "callback_data": "adm:keys"}],
         [{"text": "🔄 Синхронизировать ключи с сервера", "callback_data": "adm:keysync"}],
         [{"text": "← Меню", "callback_data": "menu"}],
