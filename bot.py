@@ -563,14 +563,11 @@ class VpnBot:
                                for i, p in enumerate(config.PLANS)),
                      kb.back("adm", "← Админ"))
             return
-        # premium-ссылки (WS+TLS) идут в план p1, остальные — по кругу
-        premium = [l for l in fresh if "premium" in l]
-        regular = [l for l in fresh if "premium" not in l]
+        # все новые ссылки раскладываем по тарифам по кругу
         pools: dict[str, list[str]] = {p["code"]: [] for p in config.PLANS}
-        regular_codes = [c for c in pools if c != "p1"]
-        for i, link in enumerate(regular):
-            pools[regular_codes[i % len(regular_codes)]].append(link)
-        pools["p1"].extend(premium)
+        codes = list(pools)
+        for i, link in enumerate(fresh):
+            pools[codes[i % len(codes)]].append(link)
         for code in pools:
             if pools[code]:
                 self.db.add_keys(code, pools[code])
@@ -832,7 +829,8 @@ def selftest() -> int:
 
     print("6. Статистика")
     stats = db.stats()
-    check("выручка посчитана", stats["revenue"] == 199 and stats["paid_orders"] == 1)
+    check("выручка посчитана", stats["revenue"] == config.PLANS[0]["price"]
+          and stats["paid_orders"] == 1)
 
     print("\nИтог:", "всё работает" if ok else "есть ошибки")
     return 0 if ok else 1
