@@ -15,6 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from core import config, keyboards as kb  # noqa: E402
+from core import payments as pay_mod  # noqa: E402
 from core import server as server_mod  # noqa: E402
 from core.storage import Storage  # noqa: E402
 
@@ -78,6 +79,8 @@ class VpnBot:
         self.username = ""
         self.awaiting_key: dict[int, dict] = {}
         self.panel = None
+        self._last_card_check = 0.0
+        self._last_remind = 0.0
         if config.PANEL_URL:
             try:
                 self.panel = server_mod.Panel(config.PANEL_URL, config.PANEL_USER,
@@ -168,7 +171,58 @@ class VpnBot:
         text += (f"\n\nПереведите по СБП:\n"
                  f"<code>{config.PAY_SBP}</code> ({config.PAY_NAME})\n\n"
                  f"После перевода нажмите «Я оплатил» — ключ придёт автоматически.")
-        self.say(chat_id, text, kb.pay_manual(order_id))
+
+        markup = kb.pay_manual(order_id)
+        if config.YOOKASSA_SECRET:
+            markup["inline_keyboard"].insert(0, [
+                {"text": "💳 Оплатить картой (ЮKassa)",
+                 "callback_data": f"card:{order_id}"}])
+        self.say(chat_id, text, markup)
+
+    def cmd_card_payment(self, chat_id: int, user_id: int, order_id: int) -> None:
+        order = self.db.order(order_id)
+        if not order or order["user_id"] != user_id:
+            return
+        if order["status"] != "new":
+            self.say(chat_id, "Заказ уже обработан.")
+            return
+        result = pay_mod.create_payment(config.YOOKASSA_SHOP_ID, config.YOOKASSA_SECRET,
+                                        order["price"], f"{config.BRAND} · {order['title']}",
+                                        order_id)
+        url = (result.get("confirmation") or {}).get("confirmation_url")
+        pay_id = result.get("id")
+        if not url or not pay_id:
+            self.say(chat_id, "Не удалось создать платёж. Попробуйте по СБП.",
+                     kb.pay_manual(order_id))
+            return
+        self.db.set_charge(order_id, pay_id)
+        self.db.set_status(order_id, "card_pending")
+        self.say(chat_id,
+                 f"💳 <b>Оплата картой</b>\n\nСумма: {kb.money(order['price'])}\n\n"
+                 f"Нажмите кнопку и оплатите, затем «Проверить оплату».",
+                 {"inline_keyboard": [
+                     [{"text": "💳 Перейти к оплате", "url": url}],
+                     [{"text": "🔄 Проверить оплату",
+                       "callback_data": f"checkpay:{order_id}"}],
+                 ]})
+
+    def check_card_payment(self, chat_id: int, order_id: int) -> None:
+        order = self.db.order(order_id)
+        if not order or not order.get("charge_id"):
+            self.say(chat_id, "Платёж не найден.")
+            return
+        payment = pay_mod.get_payment(config.YOOKASSA_SHOP_ID, config.YOOKASSA_SECRET,
+                                      order["charge_id"])
+        status = pay_mod.status(payment)
+        if status == "succeeded":
+            self.db.set_status(order_id, "awaiting")
+            self.deliver(order_id)
+            self.say(chat_id, "✅ Оплата получена, ключ выдан покупателю.")
+        elif status == "canceled":
+            self.db.set_status(order_id, "new")
+            self.say(chat_id, "❌ Платёж отменён.")
+        else:
+            self.say(chat_id, "⏳ Оплата ещё не поступила. Попробуйте позже.")
 
     def mark_paid(self, chat_id: int, user_id: int, order_id: int) -> None:
         order = self.db.order(order_id)
@@ -200,8 +254,8 @@ class VpnBot:
 
     def sync_server_sub(self, payload: str, expires_at: int,
                         rename_to: str = "", comment: str = "",
-                        total_gb: int = 0) -> tuple[str, str]:
-        """Ставит срок, трафик, имя на сервере и возвращает Happ-ссылку."""
+                        total_gb: int = 0, limit_ip: int = 0) -> tuple[str, str]:
+        """Ставит срок, трафик, лимит устройств, имя на сервере и возвращает Happ-ссылку."""
         happ, email = "", ""
         if not self.panel:
             return happ, email
@@ -217,6 +271,8 @@ class VpnBot:
                     fields["expiryTime"] = expires_at * 1000
                 if total_gb and (client.get("totalGB") or 0) != total_gb:
                     fields["totalGB"] = total_gb
+                if limit_ip and (client.get("limitIp") or 0) != limit_ip:
+                    fields["limitIp"] = limit_ip
                 if rename_to:
                     new_email = "".join(
                         ch for ch in rename_to if ch.isalnum() or ch in "_@-")[:24] \
@@ -260,11 +316,13 @@ class VpnBot:
             key, expires,
             rename_to=buyer_name,
             comment=f"Заказ #{order_id} · {order['title']}",
-            total_gb=plan.get("gb", 0))
+            total_gb=plan.get("gb", 0),
+            limit_ip=plan.get("devices", 0))
         lines = [f"🎉 <b>Подписка активирована!</b>\n\n"
                  f"Тариф: {order['title']}\n"
                  f"Действует до: <b>{time.strftime('%d.%m.%Y', time.localtime(expires))}</b>\n"
-                 f"Трафик: <b>{plan.get('gb', 0)} ГБ</b>\n\n"
+                 f"Трафик: <b>{plan.get('gb', 0)} ГБ</b>\n"
+                 f"Устройств: <b>{plan.get('devices', 1)}</b>\n\n"
                  f"Ваш ключ (скопируйте полностью):\n"
                  f"<code>{key}</code>"]
         if happ:
@@ -505,6 +563,10 @@ class VpnBot:
                      f"Пусть подключится по твоей ссылке — друг получает работающий VPN, "
                      f"а ты помогаешь проекту.\n\nТвоя ссылка:\n<code>{link}</code>",
                      kb.back("menu", "← Меню"))
+        elif data.startswith("card:"):
+            self.cmd_card_payment(chat_id, user_id, int(data[5:]))
+        elif data.startswith("checkpay:"):
+            self.check_card_payment(chat_id, int(data[9:]))
         elif data == "adm":
             if self.is_admin(user_id):
                 self.say(chat_id, "⚙️ Админ-панель", kb.admin_panel())
@@ -530,6 +592,44 @@ class VpnBot:
         except Exception:
             pass
 
+    def background_tasks(self) -> None:
+        now = time.time()
+        # проверка карточных платежей
+        if config.YOOKASSA_SECRET and now - self._last_card_check >= 30:
+            self._last_card_check = now
+            for order in self.db.card_pending_orders():
+                try:
+                    payment = pay_mod.get_payment(config.YOOKASSA_SHOP_ID,
+                                                  config.YOOKASSA_SECRET,
+                                                  order["charge_id"])
+                    status = pay_mod.status(payment)
+                    if status == "succeeded":
+                        self.db.set_status(order["id"], "awaiting")
+                        self.deliver(order["id"])
+                    elif status == "canceled":
+                        self.db.set_status(order["id"], "new")
+                except Exception as exc:
+                    print("card check:", exc)
+        # напоминания об окончании подписки
+        if now - self._last_remind >= 3600:
+            self._last_remind = now
+            self.send_reminders()
+
+    def send_reminders(self) -> None:
+        today = time.strftime("%Y-%m-%d")
+        for sub in self.db.expiring_subs(config.REMIND_DAYS):
+            if sub.get("reminded_day") == today:
+                continue
+            days_left = (sub["expires_at"] - int(time.time())) // 86400 + 1
+            try:
+                self.say(sub["user_id"],
+                         f"⏳ Ваша подписка заканчивается через <b>{days_left} дн.</b>\n"
+                         f"Продлите, чтобы VPN не отключился.",
+                         kb.back("plans", "🛡 Продлить"))
+                self.db.set_reminded(sub["user_id"], today)
+            except Exception as exc:
+                print("reminder:", exc)
+
     def poll(self) -> None:
         while True:
             try:
@@ -541,6 +641,7 @@ class VpnBot:
                         self.on_message(update["message"])
                     elif "callback_query" in update:
                         self.on_callback(update["callback_query"])
+                self.background_tasks()
             except Exception as exc:
                 print("ошибка опроса:", exc)
                 time.sleep(5)
