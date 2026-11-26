@@ -177,7 +177,35 @@ class VpnBot:
             markup["inline_keyboard"].insert(0, [
                 {"text": "💳 Оплатить картой (ЮKassa)",
                  "callback_data": f"card:{order_id}"}])
+        if config.LAVA_SECRET:
+            markup["inline_keyboard"].insert(0, [
+                {"text": "💳 Оплатить картой (Lava)",
+                 "callback_data": f"lava:{order_id}"}])
         self.say(chat_id, text, markup)
+
+    def cmd_lava_payment(self, chat_id: int, user_id: int, order_id: int) -> None:
+        order = self.db.order(order_id)
+        if not order or order["user_id"] != user_id:
+            return
+        if order["status"] != "new":
+            self.say(chat_id, "Заказ уже обработан.")
+            return
+        url = pay_mod.lava_create_invoice(config.LAVA_SHOP_ID, config.LAVA_SECRET,
+                                          order["price"], order_id)
+        if not url:
+            self.say(chat_id, "Не удалось создать счёт. Попробуйте по СБП.",
+                     kb.pay_manual(order_id))
+            return
+        self.db.set_charge(order_id, "lava")
+        self.db.set_status(order_id, "card_pending")
+        self.say(chat_id,
+                 f"💳 <b>Оплата картой</b>\n\nСумма: {kb.money(order['price'])}\n\n"
+                 f"Нажмите кнопку и оплатите, затем «Проверить оплату».",
+                 {"inline_keyboard": [
+                     [{"text": "💳 Перейти к оплате", "url": url}],
+                     [{"text": "🔄 Проверить оплату",
+                       "callback_data": f"checkpay:{order_id}"}],
+                 ]})
 
     def cmd_card_payment(self, chat_id: int, user_id: int, order_id: int) -> None:
         order = self.db.order(order_id)
@@ -211,8 +239,21 @@ class VpnBot:
         if not order or not order.get("charge_id"):
             self.say(chat_id, "Платёж не найден.")
             return
+        charge = order["charge_id"]
+        if charge == "lava":
+            status = pay_mod.lava_status(config.LAVA_SHOP_ID, config.LAVA_SECRET, order_id)
+            if status == "success":
+                self.db.set_status(order_id, "awaiting")
+                self.deliver(order_id)
+                self.say(chat_id, "✅ Оплата получена, ключ выдан покупателю.")
+            elif status == "fail":
+                self.db.set_status(order_id, "new")
+                self.say(chat_id, "❌ Платёж отменён.")
+            else:
+                self.say(chat_id, "⏳ Оплата ещё не поступила. Попробуйте позже.")
+            return
         payment = pay_mod.get_payment(config.YOOKASSA_SHOP_ID, config.YOOKASSA_SECRET,
-                                      order["charge_id"])
+                                      charge[3:] if charge.startswith("yk:") else charge)
         status = pay_mod.status(payment)
         if status == "succeeded":
             self.db.set_status(order_id, "awaiting")
@@ -565,6 +606,8 @@ class VpnBot:
                      kb.back("menu", "← Меню"))
         elif data.startswith("card:"):
             self.cmd_card_payment(chat_id, user_id, int(data[5:]))
+        elif data.startswith("lava:"):
+            self.cmd_lava_payment(chat_id, user_id, int(data[5:]))
         elif data.startswith("checkpay:"):
             self.check_card_payment(chat_id, int(data[9:]))
         elif data == "adm":
@@ -595,19 +638,29 @@ class VpnBot:
     def background_tasks(self) -> None:
         now = time.time()
         # проверка карточных платежей
-        if config.YOOKASSA_SECRET and now - self._last_card_check >= 30:
+        if (config.YOOKASSA_SECRET or config.LAVA_SECRET) and now - self._last_card_check >= 30:
             self._last_card_check = now
             for order in self.db.card_pending_orders():
                 try:
-                    payment = pay_mod.get_payment(config.YOOKASSA_SHOP_ID,
-                                                  config.YOOKASSA_SECRET,
-                                                  order["charge_id"])
-                    status = pay_mod.status(payment)
-                    if status == "succeeded":
-                        self.db.set_status(order["id"], "awaiting")
-                        self.deliver(order["id"])
-                    elif status == "canceled":
-                        self.db.set_status(order["id"], "new")
+                    if order["charge_id"] == "lava":
+                        st = pay_mod.lava_status(config.LAVA_SHOP_ID, config.LAVA_SECRET,
+                                                 order["id"])
+                        if st == "success":
+                            self.db.set_status(order["id"], "awaiting")
+                            self.deliver(order["id"])
+                        elif st == "fail":
+                            self.db.set_status(order["id"], "new")
+                    else:
+                        charge = order["charge_id"]
+                        payment = pay_mod.get_payment(
+                            config.YOOKASSA_SHOP_ID, config.YOOKASSA_SECRET,
+                            charge[3:] if charge.startswith("yk:") else charge)
+                        status = pay_mod.status(payment)
+                        if status == "succeeded":
+                            self.db.set_status(order["id"], "awaiting")
+                            self.deliver(order["id"])
+                        elif status == "canceled":
+                            self.db.set_status(order["id"], "new")
                 except Exception as exc:
                     print("card check:", exc)
         # напоминания об окончании подписки
