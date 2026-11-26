@@ -82,6 +82,7 @@ class VpnBot:
         self.awaiting_key: dict[int, dict] = {}
         self.awaiting_review: dict[int, int] = {}
         self.awaiting_promo: set[int] = set()
+        self.awaiting_setting: dict[int, str] = {}
         self.panels: dict[str, server_mod.Panel] = {}
         self._last_card_check = 0.0
         self._last_remind = 0.0
@@ -89,6 +90,18 @@ class VpnBot:
         self._health_thread: threading.Thread | None = None
         self._health_result: tuple[dict, dict] | None = None
         self._alerts: set[str] = set()
+        self.load_settings()
+        self.connect_panels()
+
+    def load_settings(self) -> None:
+        for key, _, _ in config.EDITABLE:
+            value = self.db.setting("cfg:" + key, None)
+            if value is not None:
+                config.set_value(key, value)
+        config.set_locations(json.loads(self.db.setting("cfg:locations", "[]")))
+
+    def connect_panels(self) -> None:
+        self.panels.clear()
         for loc in config.LOCATIONS:
             if not loc["url"]:
                 continue
@@ -697,6 +710,33 @@ class VpnBot:
                      f"Оплаченных заказов: {stats['paid_orders']}\n"
                      f"Выручка: {kb.money(stats['revenue'])}",
                      kb.back("adm", "← Админ"))
+        elif action == "settings":
+            self.show_settings(chat_id)
+        elif action.startswith("set:"):
+            key = action[4:]
+            item = next((e for e in config.EDITABLE if e[0] == key), None)
+            if item:
+                self.awaiting_setting[user_id] = key
+                hint = f"\n<i>{item[2]}</i>" if item[2] else ""
+                self.say(chat_id, f"{item[1]}\nСейчас: <b>{html.escape(str(getattr(config, key)) or '—')}"
+                                  f"</b>{hint}\n\nПришлите новое значение одним сообщением.",
+                         kb.back("adm:settings", "← Настройки"))
+        elif action == "locs":
+            self.show_locations(chat_id)
+        elif action == "locadd":
+            self.awaiting_setting[user_id] = "location"
+            self.say(chat_id, "🌍 <b>Новый сервер</b>\n\nПришлите одним сообщением 5 строк:\n"
+                              "<code>fi\n🇫🇮 Финляндия\nhttps://IP:порт/путь/\nлогин\nпароль</code>\n\n"
+                              "Код — латиницей (fi, nl, de…). Тот же код заменит сервер. "
+                              "Сообщение с паролем бот сразу удалит.",
+                     kb.back("adm:locs", "← Серверы"))
+        elif action.startswith("locdel:"):
+            extra = [loc for loc in json.loads(self.db.setting("cfg:locations", "[]"))
+                     if loc["code"] != action[7:]]
+            self.db.set_setting("cfg:locations", json.dumps(extra, ensure_ascii=False))
+            config.set_locations(extra)
+            self.connect_panels()
+            self.show_locations(chat_id)
         elif action == "promos":
             lines = ["🏷 <b>Промокоды</b>\n"]
             for p in self.db.promos():
@@ -783,6 +823,73 @@ class VpnBot:
             self.awaiting_key[user_id] = {"key_id": int(key_id), "act": act}
             self.say(chat_id, "Пришлите текст одним сообщением.")
 
+    # ---------- настройки из бота ----------
+    def show_settings(self, chat_id: int) -> None:
+        rows = [[{"text": f"{label}: {getattr(config, key) or '—'}"[:60],
+                  "callback_data": f"adm:set:{key}"}] for key, label, _ in config.EDITABLE]
+        rows.append([{"text": "← Админ", "callback_data": "adm"}])
+        self.say(chat_id, "🛠 <b>Настройки</b>\n\nНажмите, чтобы изменить. "
+                          "Действует сразу, перезапуск не нужен.", {"inline_keyboard": rows})
+
+    def show_locations(self, chat_id: int) -> None:
+        added = {loc["code"] for loc in json.loads(self.db.setting("cfg:locations", "[]"))}
+        lines, rows = ["🌍 <b>Серверы</b>\n"], []
+        for loc in config.LOCATIONS:
+            state = "✅ панель подключена" if loc["code"] in self.panels else (
+                "⚠️ панель не отвечает" if loc["url"] else "без панели")
+            keys = sum(self.db.keys_left(p["code"], loc["code"]) for p in config.PLANS)
+            lines.append(f"{loc['name']} (<code>{loc['code']}</code>) · {state} · ключей: {keys}")
+            if loc["code"] in added:
+                rows.append([{"text": f"🗑 Удалить {loc['name']}",
+                              "callback_data": f"adm:locdel:{loc['code']}"}])
+        rows.insert(0, [{"text": "➕ Добавить сервер", "callback_data": "adm:locadd"}])
+        rows.append([{"text": "🔄 Синхронизировать ключи", "callback_data": "adm:keysync"}])
+        rows.append([{"text": "← Админ", "callback_data": "adm"}])
+        self.say(chat_id, "\n".join(lines), {"inline_keyboard": rows})
+
+    def save_setting(self, chat_id: int, user_id: int, key: str, text: str,
+                     message_id: int | None = None) -> None:
+        if not self.is_admin(user_id):
+            return
+        if key == "location":
+            if message_id:
+                try:
+                    self.tg.call("deleteMessage", chat_id=chat_id, message_id=message_id)
+                except Exception:
+                    pass
+            self.add_location(chat_id, text)
+            return
+        error = config.set_value(key, text)
+        if error:
+            self.awaiting_setting[user_id] = key
+            self.say(chat_id, f"❌ {error} Пришлите ещё раз.",
+                     kb.back("adm:settings", "← Настройки"))
+            return
+        self.db.set_setting("cfg:" + key, text.strip())
+        self.show_settings(chat_id)
+
+    def add_location(self, chat_id: int, text: str) -> None:
+        parts = [line.strip() for line in text.splitlines() if line.strip()]
+        code = parts[0].lower() if parts else ""
+        if len(parts) != 5 or not code.isascii() or not code.isalnum() \
+                or not parts[2].startswith("http"):
+            self.say(chat_id, "❌ Нужно 5 строк: код, название, адрес панели, логин, пароль.",
+                     kb.back("adm:locadd", "Ещё раз"))
+            return
+        loc = {"code": code, "name": parts[1], "url": parts[2],
+               "user": parts[3], "pass": parts[4]}
+        extra = [x for x in json.loads(self.db.setting("cfg:locations", "[]"))
+                 if x["code"] != code] + [loc]
+        self.db.set_setting("cfg:locations", json.dumps(extra, ensure_ascii=False))
+        config.set_locations(extra)
+        self.connect_panels()
+        if code in self.panels:
+            note = "✅ Панель подключена. Создайте в ней клиентов и нажмите «🔄 Синхронизировать ключи»."
+        else:
+            note = "⚠️ Сервер сохранён, но панель не ответила — проверьте адрес, логин и пароль."
+        self.say(chat_id, f"{loc['name']} добавлен.\n\n{note}")
+        self.show_locations(chat_id)
+
     # ---------- обработка ----------
     def sync_keys(self, chat_id: int) -> None:
         """Тянет ссылки со всех панелей и раскладывает по тарифам (m1 → m3 → y1) по кругу."""
@@ -856,6 +963,10 @@ class VpnBot:
             return
         if user_id in self.awaiting_review and text and not text.startswith("/"):
             self.save_review_text(chat_id, user_id, frm, text)
+            return
+        if user_id in self.awaiting_setting and text and not text.startswith("/"):
+            self.save_setting(chat_id, user_id, self.awaiting_setting.pop(user_id), text,
+                              msg.get("message_id"))
             return
         if user_id in self.awaiting_promo and text and not text.startswith("/"):
             self.awaiting_promo.discard(user_id)
@@ -1338,6 +1449,28 @@ def selftest() -> int:
     sent = t.count("sendMessage")
     bot.send_winbacks()
     check("один раз", t.count("sendMessage") == sent)
+
+    print("13. Настройки из бота")
+    bot.admin_action(1, 1, "set:TRIAL_DAYS")
+    bot.on_message({"chat": {"id": 1}, "from": {"id": 1}, "text": "3", "message_id": 5})
+    check("значение применилось", config.TRIAL_DAYS == 3)
+    bot.admin_action(1, 1, "set:WINBACK_PERCENT")
+    bot.on_message({"chat": {"id": 1}, "from": {"id": 1}, "text": "150"})
+    check("неверное значение отклонено", config.WINBACK_PERCENT != 150
+          and "от 0 до 100" in t.calls[-1][1]["text"])
+    bot.on_message({"chat": {"id": 1}, "from": {"id": 1}, "text": "-"})
+    bot.awaiting_setting.clear()
+    config.TRIAL_DAYS = 0
+    VpnBot(Telegram("test", transport=t), db, {1})
+    check("сохранилось после перезапуска", config.TRIAL_DAYS == 3)
+    bot.admin_action(1, 1, "locadd")
+    bot.on_message({"chat": {"id": 1}, "from": {"id": 1}, "message_id": 9,
+                    "text": "nl\n🇳🇱 Нидерланды\nhttp://127.0.0.1:1/x/\nadmin\npass"})
+    check("сервер добавлен", any(loc["code"] == "nl" for loc in config.LOCATIONS))
+    check("сообщение с паролем удалено", any(c[0] == "deleteMessage" and c[1].get("message_id") == 9
+                                            for c in t.calls))
+    bot.admin_action(1, 1, "locdel:nl")
+    check("сервер удалён", all(loc["code"] != "nl" for loc in config.LOCATIONS))
 
     print("\nИтог:", "всё работает" if ok else "есть ошибки")
     return 0 if ok else 1
