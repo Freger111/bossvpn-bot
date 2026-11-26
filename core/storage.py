@@ -231,6 +231,19 @@ class Storage:
             self.db.commit()
             return row["payload"]
 
+    def release_key(self, payload: str) -> None:
+        with self.lock:
+            self.db.execute("UPDATE keys_pool SET used = 0, order_id = NULL WHERE payload = ?",
+                            (payload,))
+            self.db.commit()
+
+    def drop_free_keys(self, location: str) -> int:
+        with self.lock:
+            cur = self.db.execute("DELETE FROM keys_pool WHERE location = ? AND used = 0",
+                                  (location,))
+            self.db.commit()
+            return cur.rowcount
+
     # ---------- заказы ----------
     def create_order(self, user_id: int, plan: dict, price: int | None = None,
                      balance_used: int = 0, location: str = "", promo: str = "") -> int:
@@ -381,6 +394,16 @@ class Storage:
         with self.lock:
             self.db.execute("UPDATE users SET promo = ? WHERE id = ?", (code, user_id))
             self.db.commit()
+
+    def promo_orders(self, code: str, user_id: int, mine: bool) -> list[dict]:
+        """Неоплаченные заказы с промокодом: свои или чужие (за последние сутки)."""
+        op = "=" if mine else "!="
+        with self.lock:
+            rows = self.db.execute(
+                f"SELECT * FROM orders WHERE promo = ? AND user_id {op} ?"
+                " AND status IN ('new','awaiting','card_pending') AND created_at > ?",
+                (code, user_id, int(time.time()) - 86400)).fetchall()
+        return [dict(r) for r in rows]
 
     def use_promo(self, code: str, user_id: int) -> None:
         with self.lock:
