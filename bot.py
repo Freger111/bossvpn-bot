@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from core import config, keyboards as kb  # noqa: E402
 from core import payments as pay_mod  # noqa: E402
 from core import server as server_mod  # noqa: E402
+from core import subproxy  # noqa: E402
 from core.storage import Storage  # noqa: E402
 
 
@@ -844,6 +845,7 @@ def main() -> int:
         print("Нет BOT_TOKEN. Заполните .env или запустите: python bot.py --selftest")
         return 1
     bot = VpnBot(Telegram(config.BOT_TOKEN), Storage(config.DB_PATH), config.ADMINS)
+    subproxy.start()
     print(f"{config.BRAND} запущен. Ctrl+C — остановить.")
     bot.poll()
     return 0

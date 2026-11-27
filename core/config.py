@@ -42,6 +42,10 @@ PANEL_URL = os.environ.get("PANEL_URL", "")
 PANEL_USER = os.environ.get("PANEL_USER", "admin")
 PANEL_PASS = os.environ.get("PANEL_PASS", "")
 
+# прокси подписок через домен бота (bothost и т.п.)
+SUB_PORT = int(os.environ.get("SUB_PORT", os.environ.get("PORT", "0")) or 0)
+SUB_UPSTREAM = os.environ.get("SUB_UPSTREAM", "http://31.76.45.106/u4r1ak8wekd7wyrv")
+
 YOOKASSA_SHOP_ID = os.environ.get("YOOKASSA_SHOP_ID", "")
 YOOKASSA_SECRET = os.environ.get("YOOKASSA_SECRET", "")
 LAVA_SHOP_ID = os.environ.get("LAVA_SHOP_ID", "")
