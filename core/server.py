@@ -48,8 +48,6 @@ class Panel:
 
     def list_clients(self) -> list[dict]:
         result = self._request("GET", "/panel/api/clients/list")
-        if result.get("success") is False:
-            raise RuntimeError(f"панель вернула ошибку: {result.get('msg')}")
         return result.get("obj") or []
 
     def traffic(self, email: str) -> dict:
@@ -75,12 +73,6 @@ class Panel:
     def links(self) -> list[str]:
         result = self._request("GET", "/panel/api/inbounds/allLinks")
         return result.get("obj") or []
-
-    def happ_link(self, client_id: int) -> str:
-        """Ссылка для приложения Happ (там видна подписка и трафик)."""
-        result = self._request("POST", f"/panel/api/clients/happLink/{client_id}")
-        obj = result.get("obj") or {}
-        return obj.get("encryptedLink") or ""
 
     def find_by_uuid(self, uuid: str) -> dict | None:
         for client in self.list_clients():

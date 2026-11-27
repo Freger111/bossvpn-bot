@@ -36,45 +36,11 @@ BOT_USER = os.environ.get("BOT_USERNAME", "bossVPHbot")
 PAY_SBP = os.environ.get("PAY_SBP", "+7 900 000-00-00")
 PAY_NAME = os.environ.get("PAY_NAME", "Т-Банк")
 TRIAL_DAYS = int(os.environ.get("TRIAL_DAYS", "0"))   # 0 — без пробного периода
-WINBACK_PERCENT = int(os.environ.get("WINBACK_PERCENT", "20"))   # 0 — не возвращать ушедших
-WINBACK_AFTER_DAYS = int(os.environ.get("WINBACK_AFTER_DAYS", "1"))
 REF_PERCENT = int(os.environ.get("REF_PERCENT", "10"))
 
 PANEL_URL = os.environ.get("PANEL_URL", "")
 PANEL_USER = os.environ.get("PANEL_USER", "admin")
 PANEL_PASS = os.environ.get("PANEL_PASS", "")
-
-
-def load_locations() -> list[dict]:
-    """Локации (страны) серверов. У каждой — своя панель 3x-ui и свой пул ключей.
-
-    LOCATIONS=de,fi
-    LOC_FI_NAME=🇫🇮 Финляндия
-    LOC_FI_PANEL_URL=... / LOC_FI_PANEL_USER=... / LOC_FI_PANEL_PASS=...
-    Первая локация по умолчанию берёт PANEL_URL / PANEL_USER / PANEL_PASS.
-    """
-    names = {"de": "🇩🇪 Германия", "fi": "🇫🇮 Финляндия", "nl": "🇳🇱 Нидерланды"}
-    codes = [c.strip().lower() for c in os.environ.get("LOCATIONS", "de").split(",")
-             if c.strip()] or ["de"]
-    result = []
-    for i, code in enumerate(codes):
-        env = lambda key, default="": os.environ.get(f"LOC_{code.upper()}_{key}", default)  # noqa: E731
-        result.append({
-            "code": code,
-            "name": env("NAME", names.get(code, code.upper())),
-            "url": env("PANEL_URL", PANEL_URL if i == 0 else ""),
-            "user": env("PANEL_USER", PANEL_USER if i == 0 else "admin"),
-            "pass": env("PANEL_PASS", PANEL_PASS if i == 0 else ""),
-        })
-    return result
-
-
-LOCATIONS = load_locations()
-DEFAULT_LOCATION = LOCATIONS[0]["code"]
-
-
-def location(code: str) -> dict:
-    return next((loc for loc in LOCATIONS if loc["code"] == code), LOCATIONS[0])
 
 YOOKASSA_SHOP_ID = os.environ.get("YOOKASSA_SHOP_ID", "")
 YOOKASSA_SECRET = os.environ.get("YOOKASSA_SECRET", "")
@@ -83,50 +49,6 @@ LAVA_SECRET = os.environ.get("LAVA_SECRET", "")
 ENOT_API_KEY = os.environ.get("ENOT_API_KEY", "")
 ENOT_SHOP_ID = os.environ.get("ENOT_SHOP_ID", "")
 REMIND_DAYS = int(os.environ.get("REMIND_DAYS", "3"))
-LOW_KEYS = int(os.environ.get("LOW_KEYS", "3"))   # предупреждать админа, когда ключей ≤ N
-REVIEW_AFTER_DAYS = int(os.environ.get("REVIEW_AFTER_DAYS", "3"))   # 0 — не спрашивать отзыв
-REVIEWS_CHANNEL = os.environ.get("REVIEWS_CHANNEL", "")   # @канал для публикации отзывов
-
-# Настройки, которые админ меняет прямо в боте (хранятся в БД и перекрывают .env)
-EDITABLE = [
-    ("TRIAL_DAYS", "🎁 Пробный период, дней", "0 — выключен"),
-    ("WINBACK_PERCENT", "💙 Скидка ушедшим, %", "0 — не писать ушедшим"),
-    ("WINBACK_AFTER_DAYS", "💙 Писать ушедшим через, дней", ""),
-    ("REF_PERCENT", "👥 Бонус за друга, %", ""),
-    ("REMIND_DAYS", "⏳ Напоминать до конца, дней", ""),
-    ("REVIEW_AFTER_DAYS", "⭐ Просить отзыв через, дней", "0 — не просить"),
-    ("LOW_KEYS", "🔑 Алерт, если ключей ≤", ""),
-    ("REVIEWS_CHANNEL", "📢 Канал отзывов", "@канал, «-» — очистить"),
-    ("PAY_SBP", "💳 Номер СБП", ""),
-    ("PAY_NAME", "🏦 Банк", ""),
-    ("SUPPORT", "💬 Поддержка", "@username"),
-]
-ENV_LOCATIONS = [dict(loc) for loc in LOCATIONS]
-
-
-def set_value(key: str, raw: str) -> str:
-    """Проверяет и применяет значение. Возвращает текст ошибки или пустую строку."""
-    raw = raw.strip()
-    if isinstance(globals()[key], int):
-        if not raw.isdigit():
-            return "Нужно целое число 0 или больше."
-        value = int(raw)
-        if key.endswith("PERCENT") and value > 100:
-            return "Процент — от 0 до 100."
-        globals()[key] = value
-    else:
-        if not raw:
-            return "Пустое значение."
-        globals()[key] = "" if raw == "-" else raw[:100]
-    return ""
-
-
-def set_locations(extra: list[dict]) -> None:
-    """Локации из .env плюс добавленные в боте (по коду — бот важнее)."""
-    merged = {loc["code"]: dict(loc) for loc in ENV_LOCATIONS}
-    for loc in extra:
-        merged[loc["code"]] = dict(loc)
-    LOCATIONS[:] = list(merged.values())
 
 BLACK = (8, 10, 16)
 CYAN = (58, 215, 255)
@@ -141,7 +63,7 @@ def plan_image(code: str):
     return BASE / "vpn_brand" / f"plan_{code}.png"
 
 PLANS = [
-    {"code": "m1", "title": "1 месяц", "days": 30, "price": 69, "gb": 30,
+    {"code": "m1", "title": "1 месяц", "days": 30, "price": 99, "gb": 30,
      "devices": 4, "note": "30 ГБ · до 4 устройств"},
     {"code": "m3", "title": "3 месяца", "days": 90, "price": 199, "gb": 100,
      "devices": 6, "note": "100 ГБ · до 6 устройств"},
